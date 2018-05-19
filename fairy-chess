@@ -32,7 +32,7 @@ TEST_CASES = [
     _d(
         "10 Amazons",
         """
-        A8: R+1-,Rx1-,L21
+        A10: R+1-,Rx1-,L21
         """
     ),
     _d(
@@ -42,8 +42,8 @@ TEST_CASES = [
         A2: R+1-,Rx1-,L21
         C4: R+1-,L10
         P4: Rx1-,L10
-        C4: R+1-,L21
-        P4: Rx1-,L21
+        T4: R+1-,L21
+        O4: Rx1-,L21
         """
     ),
     _d(
@@ -60,7 +60,7 @@ TEST_CASES = [
         """
     ),
     _d(
-        "3 each of the 9 basic leapers",
+        "3 each of 10 basic leapers",
         """
         W3: L10
         F3: L11
@@ -71,6 +71,7 @@ TEST_CASES = [
         L3: L31
         J3: L32
         G3: L33
+        X3: L40
         """
     ),
     _d(
