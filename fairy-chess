@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+# Python 3.5+ required
+
+import argparse
+import itertools
+import os.path
+import sys
+import subprocess
+import textwrap
+from collections import Counter
+from pprint import pprint
+
+
+_d = lambda title, defn: (title, textwrap.dedent(defn).strip())
+TEST_CASES = [
+    _d(
+        "8 Queens",
+        """
+        Q8: R+1-,Rx1-
+        """
+    ),
+    _d(
+        "Standard chess set (without pawns)",
+        """
+        K2: L10,L11
+        Q2: R+1-,Rx1-
+        R4: R+1-
+        B4: Rx1-
+        N4: L21
+        """
+    ),
+    _d(
+        "10 Amazons",
+        """
+        A8: R+1-,Rx1-,L21
+        """
+    ),
+    _d(
+        "Compound Pieces",
+        """
+        K2: L10,L11
+        A2: R+1-,Rx1-,L21
+        C4: R+1-,L10
+        P4: Rx1-,L10
+        C4: R+1-,L21
+        P4: Rx1-,L21
+        """
+    ),
+    _d(
+        "50 Wazirs",
+        """
+        W50: L10
+        """
+    ),
+    _d(
+        "20 Wazirs and 20 Ferzes",
+        """
+        W20: L10
+        F20: L11
+        """
+    ),
+    _d(
+        "3 each of the 9 basic leapers",
+        """
+        W3: L10
+        F3: L11
+        D3: L20
+        N3: L21
+        A3: L22
+        H3: L30
+        L3: L31
+        J3: L32
+        G3: L33
+        """
+    ),
+    _d(
+        "20 8-way hoppers",
+        """
+        A20: H+1-,Hx1-
+        """
+    ),
+    _d(
+        "6 copies of 4 pieces",
+        """
+        A6: L10
+        B6: L11
+        C6: R+13
+        D6: Rx13
+        """
+    ),
+    _d(
+        "Large Exotic Set",
+        """
+        A12: L12,L32
+        B8: H+1-,Rx13
+        C8: Hx1-,R+13
+        D4: Rx1-,L10
+        E4: R+1-,L11
+        """
+    ),
+]
+
+
+def red(string):
+    return ''.join(['\033[91m', str(string), '\033[0m'])
+
+def green(string):
+    return ''.join(['\033[92m', str(string), '\033[m'])
+
+
+class Leaper:
+    def __init__(self, m, n):
+        self.m = int(m)
+        self.n = int(n)
+
+    def is_legal_move(self, board, src_r, src_c, dst_r, dst_c):
+        dr = abs(src_r - dst_r)
+        dc = abs(src_c - dst_c)
+        return (
+            (dr == self.m and dc == self.n)
+            or (dr == self.n and dc == self.m)
+        )
+
+
+class Linear:
+    def __init__(self, axis, min, max):
+        self.diagonal = axis == 'x'
+        self.min = int(min)
+        self.max = int(max) if max.isdigit() else None
+
+    def is_legal_move(self, board, src_r, src_c, dst_r, dst_c):
+        if src_r == dst_r and src_c == dst_c:
+            return False
+        dr = abs(src_r - dst_r)
+        dc = abs(src_c - dst_c)
+        if self.diagonal:
+            if dr != dc:
+                return False
+        else:
+            if not (dr == 0 or dc == 0):
+                return False
+        if self.max:
+            return self.min <= max(dr, dc) <= self.max
+        else:
+            return max(dr, dc) >= self.min
+
+    def count_obstacles(self, board, src_r, src_c, dst_r, dst_c):
+        dr = dst_r - src_r
+        dc = dst_c - src_c
+        dist = max(abs(dr), abs(dc))
+        dir_r, dir_c = dr // dist, dc // dist
+        return sum(
+            bool(board[src_r + off * dir_r][src_c + off * dir_c])
+            for off in range(1, dist)
+        )
+
+class Rider(Linear):
+    def is_legal_move(self, board, src_r, src_c, dst_r, dst_c):
+        return (
+            super().is_legal_move(board, src_r, src_c, dst_r, dst_c)
+            and self.count_obstacles(board, src_r, src_c, dst_r, dst_c) == 0
+        )
+
+
+class Hopper(Linear):
+    def is_legal_move(self, board, src_r, src_c, dst_r, dst_c):
+        return (
+            super().is_legal_move(board, src_r, src_c, dst_r, dst_c)
+            and self.count_obstacles(board, src_r, src_c, dst_r, dst_c) == 1
+        )
+
+
+class Piece:
+    def __init__(self, moves):
+        self.moves = []
+        for move in moves.split(','):
+            if move[0] == 'L':
+                self.moves.append(Leaper(*move[1:]))
+            elif move[0] == 'R':
+                self.moves.append(Rider(*move[1:]))
+            elif move[0] == 'H':
+                self.moves.append(Hopper(*move[1:]))
+
+    def is_legal_move(self, board, src_r, src_c, dst_r, dst_c):
+        if src_r == dst_r and src_c == dst_c:
+            return False
+        return any(
+            move.is_legal_move(board, src_r, src_c, dst_r, dst_c)
+            for move in self.moves
+        )
+
+
+def parse_pieces(text):
+    pieces = {}
+    counts = {}
+    for line in text.splitlines():
+        line = line.strip()
+        ptype, moves = line.split(': ')
+        letter = ptype[0]
+        count = int(ptype[1:])
+        pieces[letter] = Piece(moves)
+        counts[letter] = count
+    return pieces, counts
+
+
+def parse_board(text):
+    return [
+        [
+            char if char.isupper() else None
+            for char in line
+            if char.isupper() or char == '.'
+        ]
+        for line in text.splitlines()
+    ]
+
+
+def validate_solution(board, pieces, expected_counts):
+    mistake_count = 0
+    attackers = []
+    actual_counts = Counter()
+    height = len(board)
+    width = len(board[0]) if height else 0
+    if height < 1 or width < 1:
+        print(red("Board is not at least 1x1"))
+        return 1
+    elif any(width != len(row) for row in board):
+        print(red("Board is jagged"))
+        return 1
+    for r, row in enumerate(board):
+        for c, space in enumerate(row):
+            if not space:
+                pass # empty
+            elif space in pieces:
+                attackers.append((space, pieces[space], r, c))
+                actual_counts[space] += 1
+            else:
+                print(red(
+                    "Unrecognized piece ({}) at row {}, column {}.".format(
+                        space, r, c
+                    )
+                ))
+                mistake_count += 1
+    for letter in pieces:
+        if actual_counts[letter] != expected_counts[letter]:
+            print(red(
+                "Incorrect number of {}s. (Expected {}, got {})".format(
+                    letter, expected_counts[letter], actual_counts[letter]
+                )
+            ))
+            mistake_count += 1
+    threatened = []
+    for id_a, piece_a, r_a, c_a in attackers:
+        for id_b, piece_b, r_b, c_b in attackers:
+            if r_a == r_b and c_a == c_b:
+                continue # Same Piece
+            if piece_a.is_legal_move(board, r_a, c_a, r_b, c_b):
+                print(red(
+                    "{} at {}, {} threatens {} at {}, {}".format(
+                        id_a, r_a, c_a,
+                        id_b, r_b, c_b
+                    )
+                ))
+                threatened.append((r_b, c_b))
+                mistake_count += 1
+    for r, row in enumerate(board):
+        for c, cell in enumerate(row):
+            if (r, c) in threatened:
+                print(red(cell), end=' ')
+            else:
+                print(cell or '.', end=' ')
+        print()
+    return mistake_count
+
+
+def test_solver(program):
+    # set CPU affinity here
+    total_score = 0
+    fails = 0
+    for title, defn in TEST_CASES:
+        print(title)
+        print('-' * len(title))
+        try:
+            board_text = str(subprocess.run(
+                [program],
+                timeout=15,
+                input=defn.encode('utf-8'),
+                stdout=subprocess.PIPE,
+            ).stdout, 'utf-8')
+        except subprocess.TimeoutExpired:
+            print(red('Test case "{}" timed out.'.format(title)))
+            print()
+            fails += 1
+            continue
+        pieces, counts = parse_pieces(defn)
+        board = parse_board(board_text)
+        mistakes = validate_solution(board, pieces, counts)
+        if mistakes:
+            print(red('Test case "{}" failed'.format(title)))
+            fails += 1
+        else:
+            height = len(board)
+            width = len(board[0])
+            score = width * width + height * height
+            total_score += score
+            print(green(
+                'Test case "{}" passed\n  Score: {} ({}**2 + {}**2)'.format(
+                    title, score, width, height
+                )
+            ))
+        print()
+    if fails:
+        print(red("{}/{} solutions were invalid. :(".format(fails, len(TEST_CASES))))
+    else:
+        print(green("All test cases passed!\nTotal Score: {}".format(score)))
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Test Driver For "N-Queens Puzzle, but with Fairy Chess Pieces"'
+    )
+
+    parser.add_argument(
+        'solver',
+        nargs='?',
+        type=os.path.abspath,
+        help="A path to the solver program."
+    )
+
+    args = parser.parse_args()
+
+    if args.solver is None:
+        for title, defn in TEST_CASES:
+            print("###", title)
+            print()
+            for line in defn.splitlines():
+                print('    ' + line)
+            print()
+        sys.exit(0)
+
+    test_solver(args.solver)
