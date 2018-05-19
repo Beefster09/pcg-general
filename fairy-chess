@@ -2,7 +2,7 @@
 # Python 3.5+ required
 
 import argparse
-import itertools
+import os
 import os.path
 import sys
 import subprocess
@@ -107,6 +107,9 @@ def red(string):
 
 def green(string):
     return ''.join(['\033[92m', str(string), '\033[m'])
+
+def yellow(string):
+    return ''.join(['\033[93m', str(string), '\033[m'])
 
 
 class Leaper:
@@ -274,7 +277,10 @@ def validate_solution(board, pieces, expected_counts):
 
 
 def test_solver(program):
-    # set CPU affinity here
+    try:
+        os.sched_setaffinity(os.getpid(), [0])
+    except Exception:
+        print(yellow("Warning: CPU affinity could not be set."))
     total_score = 0
     fails = 0
     for title, defn in TEST_CASES:
