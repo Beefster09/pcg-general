@@ -276,7 +276,7 @@ def validate_solution(board, pieces, expected_counts):
     return mistake_count
 
 
-def test_solver(program):
+def test_solver(program, time_limit=15):
     try:
         os.sched_setaffinity(os.getpid(), [0])
     except Exception:
@@ -289,7 +289,7 @@ def test_solver(program):
         try:
             board_text = str(subprocess.run(
                 [program],
-                timeout=15,
+                timeout=time_limit,
                 input=defn.encode('utf-8'),
                 stdout=subprocess.PIPE,
             ).stdout, 'utf-8')
@@ -318,7 +318,7 @@ def test_solver(program):
     if fails:
         print(red("{}/{} solutions were invalid. :(".format(fails, len(TEST_CASES))))
     else:
-        print(green("All test cases passed!\nTotal Score: {}".format(score)))
+        print(green("All test cases passed!\nTotal Score: {}".format(total_score)))
 
 
 if __name__ == '__main__':
@@ -333,6 +333,13 @@ if __name__ == '__main__':
         help="A path to the solver program."
     )
 
+    parser.add_argument(
+        '-t', '--time-limit',
+        type=float,
+        default=15,
+        help="Time limit to use for each test case."
+    )
+
     args = parser.parse_args()
 
     if args.solver is None:
@@ -344,4 +351,4 @@ if __name__ == '__main__':
             print()
         sys.exit(0)
 
-    test_solver(args.solver)
+    test_solver(args.solver, args.time_limit)

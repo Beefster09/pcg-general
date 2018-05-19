@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+
+import sys
+import random
+
+
+def log(*args):
+    print(*args, file=sys.stderr)
+
+
+class Leaper:
+    def __init__(self, m, n):
+        self.m = int(m)
+        self.n = int(n)
+
+    def is_threat(self, board, r, c):
+        m, n = self.m, self.n
+        return any(
+            0 <= ro < len(board)
+            and 0 <= co < len(board[0])
+            and board[ro][co]
+            for ro, co in [
+                (r + m, c + n),
+                (r + m, c - n),
+                (r - m, c + n),
+                (r - m, c - n),
+                (r + n, c + m),
+                (r + n, c - m),
+                (r - n, c + m),
+                (r - n, c - m),
+            ]
+        )
+
+ORTHOGONALS = [
+    ( 1,  0),
+    ( 0,  1),
+    (-1,  0),
+    ( 0, -1)
+]
+
+DIAGONALS = [
+    ( 1,  1),
+    ( 1, -1),
+    (-1,  1),
+    (-1, -1)
+]
+
+class Linear:
+    N = None
+    def __init__(self, axis, min, max):
+        self.diagonal = axis == 'x'
+        self.min = int(min)
+        self.max = int(max) if max.isdigit() else 1e999
+
+    def is_threat(self, board, r, c):
+        return any(
+            self.nth_obstacle_in_range(board, r, c, dir, self.N)
+            for dir in (DIAGONALS if self.diagonal else ORTHOGONALS)
+        )
+
+    def nth_obstacle_in_range(self, board, r, c, dir, n):
+        dr, dc = dir
+        dist = 0
+        sofar = 0
+        while True:
+            dist += 1
+            r += dr
+            c += dc
+            if not (0 <= r < len(board) and 0 <= c < len(board[0])):
+                return False
+            if board[r][c]:
+                sofar += 1
+                if sofar >= n:
+                    return self.min <= dist <= self.max
+
+class Rider(Linear):
+    N = 1
+
+class Hopper(Linear):
+    N = 2
+
+
+class Piece:
+    def __init__(self, letter, moves):
+        self.moves = []
+        self.letter = letter
+        for move in moves.split(','):
+            if move[0] == 'L':
+                self.moves.append(Leaper(*move[1:]))
+            elif move[0] == 'R':
+                self.moves.append(Rider(*move[1:]))
+            elif move[0] == 'H':
+                self.moves.append(Hopper(*move[1:]))
+
+    def is_threat(self, board, r, c):
+        return any(
+            move.is_threat(board, r, c)
+            for move in self.moves
+        )
+
+
+def parse_pieces():
+    pieces = []
+    for line in sys.stdin:
+        line = line.strip()
+        ptype, moves = line.split(': ')
+        letter = ptype[0]
+        count = int(ptype[1:])
+        pieces += [Piece(letter, moves)] * count
+    return pieces
+
+
+def expand(board, w, h):
+    while len(board[0]) < w:
+        for row in board:
+            row.append(None)
+    while len(board) < h:
+        board.append([None] * len(board[0]))
+
+
+def trim(board):
+    while all(cell is None for cell in board[-1]):
+        board.pop()
+    while all(row[-1] is None for row in board):
+        for row in board:
+            row.pop()
+    return board
+
+
+def iter_rc():
+    size = 0
+    r, c = 0, 0
+    while True:
+        yield r, c
+        if c == 0:
+            size += 1
+            c = size
+            r = 0
+        elif r < size:
+            r += 1
+        else:
+            c -= 1
+
+
+def can_place(board, piece, place_r, place_c):
+    if board[place_r][place_c] or piece.is_threat(board, place_r, place_c):
+        return False
+    board[place_r][place_c] = True
+    for r, row in enumerate(board):
+        for c, space in enumerate(row):
+            if space and space is not True:
+                if space.is_threat(board, r, c):
+                    board[place_r][place_c] = None
+                    return False
+    board[place_r][place_c] = None
+    return True
+
+
+def simple_solution(pieces, keeprate=1):
+    board = [[None]]
+    for piece in pieces:
+        for r, c in iter_rc():
+            expand(board, c + 1, r + 1)
+            if can_place(board, piece, r, c) and random.random() < keeprate:
+                board[r][c] = piece
+                break
+    return trim(board)
+
+NUM_SOLUTIONS = 20
+
+pieces = parse_pieces()
+poss = []
+for i in range(NUM_SOLUTIONS):
+    random.shuffle(pieces)
+    poss.append(simple_solution(pieces, 1 - (i / NUM_SOLUTIONS)**2))
+
+for row in min(poss, key=lambda b: len(b)**2 + len(b[0])**2):
+    print(*[(cell.letter if cell else '.') for cell in row])
