@@ -11,16 +11,16 @@ from collections import Counter
 from pprint import pprint
 
 
-_d = lambda title, defn: (title, textwrap.dedent(defn).strip())
+case = lambda title, defn: (title, textwrap.dedent(defn).strip())
 TEST_CASES = [
-    _d(
+    case(
         "8 Queens",
         """
         Q8: R+1-,Rx1-
         """
     ),
-    _d(
-        "Standard chess set (without pawns)",
+    case(
+        "Standard Chess Set (without pawns)",
         """
         K2: L10,L11
         Q2: R+1-,Rx1-
@@ -29,13 +29,13 @@ TEST_CASES = [
         N4: L21
         """
     ),
-    _d(
+    case(
         "10 Amazons",
         """
         A10: R+1-,Rx1-,L21
         """
     ),
-    _d(
+    case(
         "Compound Pieces",
         """
         K2: L10,L11
@@ -46,21 +46,22 @@ TEST_CASES = [
         P4: Rx1-,L21
         """
     ),
-    _d(
-        "50 Wazirs",
+    case(
+        "Archbishops and Super Rooks",
         """
-        W50: L10
-        """
-    ),
-    _d(
-        "20 Wazirs and 20 Ferzes",
-        """
-        W20: L10
-        F20: L11
+        B14: Rx1-,L10
+        R8: R+1-,L11
         """
     ),
-    _d(
-        "3 each of 10 basic leapers",
+    case(
+        "Wazirs and Ferzes",
+        """
+        W21: L10
+        F24: L11
+        """
+    ),
+    case(
+        "10 Lords-A-Leaping (x3)",
         """
         W3: L10
         F3: L11
@@ -74,29 +75,30 @@ TEST_CASES = [
         X3: L40
         """
     ),
-    _d(
-        "20 8-way hoppers",
+    case(
+        "20 Frog Queens",
         """
         A20: H+1-,Hx1-
         """
     ),
-    _d(
-        "6 copies of 4 pieces",
+    case(
+        "Things are Really Hoppin'",
         """
-        A6: L10
-        B6: L11
-        C6: R+13
-        D6: Rx13
+        A12: Hx36
+        B8: H+36
+        C6: H+2-
+        D10: Hx2-
         """
     ),
-    _d(
-        "Large Exotic Set",
+    case(
+        "Blindspots",
         """
-        A12: L12,L32
-        B8: H+1-,Rx13
-        C8: Hx1-,R+13
-        D4: Rx1-,L10
-        E4: R+1-,L11
+        A6: R+36,L22
+        B16: Hx59
+        C10: L21,L33
+        D6: Rx22,R+44
+        E6: H+47,L31
+        F8: H+22,Hx22
         """
     ),
 ]
@@ -294,7 +296,7 @@ def test_solver(program, time_limit=15):
                 stdout=subprocess.PIPE,
             ).stdout, 'utf-8')
         except subprocess.TimeoutExpired:
-            print(red('Test case "{}" timed out.'.format(title)))
+            print(red("Test case timed out."))
             print()
             fails += 1
             continue
@@ -302,7 +304,7 @@ def test_solver(program, time_limit=15):
         board = parse_board(board_text)
         mistakes = validate_solution(board, pieces, counts)
         if mistakes:
-            print(red('Test case "{}" failed'.format(title)))
+            print(red("Test case failed"))
             fails += 1
         else:
             height = len(board)
@@ -310,8 +312,8 @@ def test_solver(program, time_limit=15):
             score = width * width + height * height
             total_score += score
             print(green(
-                'Test case "{}" passed\n  Score: {} ({}**2 + {}**2)'.format(
-                    title, score, width, height
+                "Test case passed with score of {} ({}**2 + {}**2)".format(
+                    score, width, height
                 )
             ))
         print()
