@@ -122,7 +122,7 @@ def run_round(competitors):
     }
 
 
-def run_game(competitors, win_score=100):
+def run_game(competitors, win_score=500):
     scores = {botclass.__name__: 0 for botclass in competitors}
     while max(scores.values()) < win_score:
         for botname, present in run_round(competitors).items():
@@ -132,7 +132,7 @@ def run_game(competitors, win_score=100):
     return scores
 
 
-def run_competition(bot_classes, win_score=100):
+def run_competition(bot_classes, win_score=500):
     for rank, (bot, score) in enumerate(
         sorted(
             run_game(bot_classes, win_score).items(),
@@ -160,13 +160,15 @@ def get_answers(url):
 def extract_bots(base_url):
     for code, title, user in get_answers(base_url):
         try:
+            print(code)
             bot_code = compile(code, f"{user} - {title}", 'exec')
             modscope = {'WhiteElephantBot': WhiteElephantBot}
-            exec(bot_code, modscope, {})
-            for var in modscope.values():
+            exec(bot_code, modscope)
+            for varname, var in modscope.items():
+                print(varname)
                 if var is WhiteElephantBot:
                     continue
-                if issubclass(var, WhiteElephantBot):
+                if isinstance(var, type) and issubclass(var, WhiteElephantBot):
                     yield var
         except Exception:
             print_exc()
@@ -196,7 +198,7 @@ def main():
     parser.add_argument(
         '-w', '--win-score',
         type=int,
-        default=100,
+        default=500,
         help="Set the score required for a win."
     )
 
