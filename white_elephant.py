@@ -44,6 +44,15 @@ PLAYER_NAMES = [
 ]
 
 
+verbose = debug = lambda *_, **__: None
+info = alert = critical = print
+
+
+class Disqualification(Exception):
+    def __init__(self, bot):
+        self.bot = bot
+
+
 class WhiteElephantBot:
     def __init__(self, name):
         self.name = name
@@ -86,19 +95,22 @@ def run_round(competitors):
     random.shuffle(bots)
     names = [bot.name for bot in bots]
     byname = {bot.name: bot for bot in bots}
-    print("[!!!] A new round begins with this turn order:")
+    verbose("[!!!] A new round begins with this turn order:")
     for bot in bots:
-        print(f"{bot.name} (Controlled by {type(bot).__name__})")
-    print("---")
+        verbose(f"{bot.name} (Controlled by {type(bot).__name__})")
+    verbose("---")
     for front in range(n_players):
         current = bots[front]
         just_stole = None
         while True:
-            action = current.take_turn(
-                names[front+1:],
-                {**presents},
-                just_stole
-            )
+            try:
+                action = current.take_turn(
+                    names[front+1:],
+                    {**presents},
+                    just_stole
+                )
+            except Exception as e:
+                raise Disqualification(type(current)) from e
             if (
                 action
                 and action != just_stole
@@ -107,15 +119,15 @@ def run_round(competitors):
             ):
                 value, steal_count = presents.pop(action)
                 presents[current.name] = value, steal_count + 1
-                print(f"{current.name} steals from {action}. (value: {value})")
+                verbose(f"{current.name} steals from {action}. (value: {value})")
                 just_stole = current.name
                 current = byname[action]
             else:
                 value = random.random()
-                print(f"{current.name} opens a present worth {value}.")
+                verbose(f"{current.name} opens a present worth {value}.")
                 presents[current.name] = value, 0
                 break
-    print("[!!!] The round ends")
+    verbose("[!!!] The round ends")
     return {
         type(bot).__name__: presents[bot.name][0]
         for bot in bots
@@ -125,22 +137,23 @@ def run_round(competitors):
 def run_game(competitors, win_score=500):
     scores = {botclass.__name__: 0 for botclass in competitors}
     while max(scores.values()) < win_score:
-        for botname, present in run_round(competitors).items():
-            scores[botname] += present
-        print()
-    print(f"[!!!] {max(scores, key=lambda s: scores[s])} is the winner!")
+        try:
+            for botname, present in run_round(competitors).items():
+                scores[botname] += present
+        except Disqualification as e:
+            competitors.remove(e.bot)
+            alert(f"{e.bot.__name__} has been disqualified. Reason: {e.__cause__}")
+        verbose()
+    info(f"[!!!] {max(scores, key=lambda s: scores[s])} is the winner!")
     return scores
 
 
-def run_competition(bot_classes, win_score=500):
-    for rank, (bot, score) in enumerate(
-        sorted(
-            run_game(bot_classes, win_score).items(),
-            key=lambda x: -x[1]
-        ),
-        1
-    ):
-        print(f"{rank:>2}. {bot:<20} {score:>7.3f}")
+def run_competition(bot_classes, win_score=500, show=print):
+    results = run_game(bot_classes, win_score)
+    ranking = sorted(results.items(), key=lambda x: -x[1])
+    for rank, (bot, score) in enumerate(ranking, 1):
+        (show or (lambda x: None))(f"{rank:>2}. {bot:<20} {score:>7.3f}")
+    return ranking
 
 
 def get_answers(url):
@@ -160,12 +173,12 @@ def get_answers(url):
 def extract_bots(base_url):
     for code, title, user in get_answers(base_url):
         try:
-            print(code)
+            debug(code)
             bot_code = compile(code, f"{user} - {title}", 'exec')
             modscope = {'WhiteElephantBot': WhiteElephantBot}
             exec(bot_code, modscope)
             for varname, var in modscope.items():
-                print(varname)
+                debug(varname)
                 if var is WhiteElephantBot:
                     continue
                 if isinstance(var, type) and issubclass(var, WhiteElephantBot):
@@ -197,12 +210,48 @@ def main():
     )
     parser.add_argument(
         '-w', '--win-score',
-        type=int,
+        type=float,
         default=500,
         help="Set the score required for a win."
     )
+    parser.add_argument(
+        '-x', '--exclude',
+        action='append',
+        default=[],
+        help="Exclude certain bots (for being broken)"
+    )
+    parser.add_argument(
+        '-v', '--verbose',
+        action='count',
+        default=0,
+        help="Show more messages"
+    )
+    parser.add_argument(
+        '-q', '--quiet',
+        action='count',
+        default=0,
+        help="Show less messages"
+    )
 
     args = parser.parse_args()
+
+    verbosity = args.verbose - args.quiet
+
+    if verbosity >= 1:
+        global verbose
+        verbose = print
+    if verbosity >= 2:
+        global debug
+        debug = print
+    if verbosity <= -1:
+        global info
+        info = lambda *_, **__: None
+    if verbosity <= -2:
+        global alert
+        alert = lambda *_, **__: None
+    if verbosity <= -3:
+        global critical
+        alert = lambda *_, **__: None
 
     bot_classes = [RandomBot, GreedyBot, NiceBot]
 
@@ -213,6 +262,11 @@ def main():
 
     if args.url:
         bot_classes += extract_bots(args.url)
+
+    if args.exclude:
+        bot_classes = [
+            bot for bot in bot_classes if bot.__name__ not in args.exclude
+        ]
 
     if args.clone and args.clone > 0:
         base_bots = [*bot_classes]
