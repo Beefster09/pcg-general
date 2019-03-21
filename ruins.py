@@ -38,6 +38,18 @@ class Ruins:
         n_treasures = self.random.randint(room // 3 + 3, room // 2 + 5)
         return [self.generate_treasure(room) for _ in range(n_treasures)]
 
+    def turn(self):
+        def get_action(adv):
+            try:
+                return self.adventurers[adv].get_action(self.snapshot(adv))
+            except Exception:
+                return None
+        actions = {
+            adv: get_action(adv)
+            for adv in self.adventurers
+        }
+        # TODO: resolve stuff
+
 
 r = Ruins()
 for room in range(1, 21):
