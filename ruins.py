@@ -79,7 +79,6 @@ class Adventurer:
     def __init__(self, name, random):
         self.name = name
         self.random = random
-        self.enter_ruins()
 
     def get_action(self, state):
         raise NotImplementedError()
@@ -166,7 +165,7 @@ class Player:
         return f"{self.name} ({type(self.bot).__name__})"
 
 
-
+Trap = object()  # simple sentinel
 class Ruins:
     def __init__(self, *adventurers, seed=None):
         assert adventurers
@@ -182,6 +181,7 @@ class Ruins:
         }
         self.rooms = [self.generate_room(1)]
         self.turn_number = 0
+        self.complete = False
 
     def new_seed(self):
         return random.Random(self.random.getrandbits(1024))
@@ -195,8 +195,6 @@ class Ruins:
     def generate_treasure(self, room):
         weight = max(1, self.ndr(2, 6) - 2)
         value = self.ndr(1, 10 * weight) + self.ndr(2, 5 * room + 10)
-        if value > room * 6 + 10:
-            value += self.random.randint(0, room * weight)
         return Treasure(f"Treasure #{next(self.treasure_num):03}", value, weight)
 
     def generate_room(self, room):
@@ -205,7 +203,7 @@ class Ruins:
 
     def turn(self):
         self.turn_number += 1
-        self.gamelog("Turn", self.turn_number, "begins!", type='major')
+        self.gamelog("Turn", self.turn_number, "begins!", type='minor')
         bids = defaultdict(list)
         drops = defaultdict(list)
         kill_later = []
@@ -217,7 +215,7 @@ class Ruins:
         for player, action in actions:
             self.gamelog(player, action, type='debug')
             if action is None:
-                kill_later.append((player, "was crushed by a boulder"))
+                kill_later.append((player, Trap))
                 continue
 
             elif isinstance(action, Move):
@@ -255,36 +253,34 @@ class Ruins:
                 treasure, bid = action
                 try:
                     bid = int(bid)
-                    min_bid = self.rooms[player.room - 1][int(treasure)].weight
+                    target = self.rooms[player.room - 1][int(treasure)]
+                    min_bid = target.weight
                 except (IndexError, TypeError, ValueError):
-                    kill_later.append((player, "fell into a pit of spikes"))
+                    kill_later.append((player, Trap))
                     continue
-                if min_bid <= bid <= player.stamina:
+                if min_bid <= bid <= player.stamina and target.weight + player.carry_weight <= 50:
                     bids[player.room, treasure].append((bid, player.name))
                     player.stamina -= bid
                 else:
-                    kill_later.append(
-                        (player, "tripped on a rock, landed on their knife, and died")
-                    )
+                    kill_later.append((player, Trap))
 
             elif isinstance(action, Drop):
-                if player.stamina >= 1:
-                    player.stamina -= 1
-                    try:
-                        dropped = player.treasures.pop(int(action.treasure))
-                    except (IndexError, TypeError, ValueError):
-                        kill_later.append(
-                            (player, "was bitten by a venomous spider and died moments later")
-                        )
-                    else:
-                        drops[player.room].append(dropped)
-                        self.gamelog(
-                            player,
-                            f"Dropped a treasure into room #{player.room}:",
-                            dropped
-                        )
+                # No need to check stamina here because we already know this player
+                # has at least 1 stamina from the player.active check earlier
+                player.stamina -= 1
+                try:
+                    dropped = player.treasures.pop(int(action.treasure))
+                except (IndexError, TypeError, ValueError):
+                    kill_later.append(
+                        (player, "was bitten by a venomous spider and died moments later.")
+                    )
                 else:
-                    kill_later.append((player, "lost the will to live"))
+                    drops[player.room].append(dropped)
+                    self.gamelog(
+                        player,
+                        f"Dropped a treasure into room #{player.room}:",
+                        dropped
+                    )
 
         for (room, index), bidlist in bids.items():
             treasure = self.rooms[room - 1][index]
@@ -307,8 +303,6 @@ class Ruins:
                         f"attempted to take {treasure.name}, but was met with resistance."
                     )
 
-        for player, message in kill_later:
-            self.kill(player, message)
 
         for room, items in drops.items():
             self.rooms[room - 1] += items
@@ -317,29 +311,93 @@ class Ruins:
             if None in room:
                 room[:] = [treasure for treasure in room if treasure]
 
+        for player, message in kill_later:
+            self.kill(player, message)
+
     def run_game(self):
         self.gamelog("A new game begins!", type='major')
+        self.gamelog("Competitors:")
+        for player in self.players.values():
+            self.gamelog(f"* {player}")
+            try:
+                player.bot.enter_ruins()
+            except Exception:
+                print(f"{MSG_COLORS['error']}Failure to initialize {player.bot}")
+                traceback.print_exc()
+                self.kill(player, "is dead on arrival.")
 
         while any(player.active for player in self.players.values()):
-            # if self.turn_number: time.sleep(0.4)
+            # input()
             self.turn()
 
+        self.complete = True
         self.gamelog("The game has ended!", type='major')
 
-        # TODO: score game
+        def ranking_key(player):
+            player.treasures.sort(key=lambda x: x.value, reverse=True)
+            return (
+                player.alive,
+                player.total_value,
+                -player.carry_weight,
+                -len(player.treasures),
+                *(treasure.value for treasure in player.treasures)
+            )
 
-    def kill(self, player, message):
+        ranked = sorted(self.players.values(), key=ranking_key, reverse=True)
+        n_players = len(ranked)
+
+        scores = [
+            (player, n_players - index if player.alive and player.treasures else 0)
+            for index, player in enumerate(ranked)
+        ]
+
+        self.gamelog(scores[0][0], "won the game", type='good')
+        self.gamelog("Score for this game:")
+        for player, score in scores:
+            self.gamelog(
+                f"{score:>4} -- {player} "
+                f"[{f'${player.total_value}' if player.alive else 'DEAD'}]"
+            )
+
+        return scores
+
+    def kill(self, player, message=Trap):
+        if message is Trap:
+            message = random.choice([
+                # Yes, this is the global random.
+                # This is cosmetic and shouldn't interfere with room generation
+                "was sliced in half by a blade trap.",
+                "fell into a pit of spikes.",
+                "was crushed by a boulder.",
+                "was eaten by a wild shriekbat.",
+                "was shot by a crossbow trap.",
+                "fell into a bottomless pit.",
+                "was devoured by a mimic.",
+                "was incinerated by a fire trap.",
+                "got sucked into a dimensional vortex.",
+                "mysteriously vanished."
+            ])
         self.gamelog(player, message, type='bad')
         player.stamina = 0
-        self.rooms[player.room - 1] += player.treasures
-        player.treasures = []
+        if player.treasures:
+            self.rooms[player.room - 1] += player.treasures
+            self.gamelog(f"{player.name} dropped these items into room {player.room}:", type='debug')
+            for treasure in player.treasures:
+                self.gamelog(treasure, type='debug')
+            player.treasures = []
 
     def ensure_room(self, room):
         while len(self.rooms) < room:
             self.rooms.append(self.generate_room(len(self.rooms) + 1))
 
     def gamelog(self, *message, type='info'):
-        print(f"{MSG_COLORS[type]}[Turn {self.turn_number:03}]", *message, end=LOG_END)
+        if self.complete:
+            prefix = 'Game End'
+        elif self.turn_number == 0:
+            prefix = 'Pregame'
+        else:
+            prefix = f"Turn {self.turn_number:03}"
+        print(f"{MSG_COLORS[type]}[{prefix}]", *message, end=LOG_END)
 
     def snapshot(self, player):
         return RoomState(
@@ -355,4 +413,35 @@ class Ruins:
         )
 
 
-Ruins(Drunkard, Drunkard, Drunkard, Drunkard, Drunkard).run_game()
+# Adventurers for testing (These intentionally lose)
+class EmoKid(Adventurer):
+    def get_action(self, state):
+        return 'drop', 0
+
+class Chad(Adventurer):
+    def get_action(self, state):
+        return 'next'
+
+class Coward(Adventurer):
+    def get_action(self, state):
+        return 'previous'
+
+class GreedyBastard(Adventurer):
+    def get_action(self, state):
+        if state.treasures:
+            return 'take', 0, state.treasures[0].weight * 2
+        else:
+            return 'next'
+
+Ruins(
+    Drunkard,
+    Drunkard,
+    Drunkard,
+    Drunkard,
+    Drunkard,
+    Drunkard,
+    EmoKid,
+    Chad,
+    Coward,
+    GreedyBastard,
+).run_game()
