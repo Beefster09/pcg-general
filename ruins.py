@@ -1,11 +1,12 @@
 #!/usr/bin/env python3.7
 
+import argparse
 import math
 import itertools
 import random
 import sys
-import traceback
 import time
+import traceback
 from collections import defaultdict, namedtuple
 from dataclasses import dataclass, field
 from typing import List
@@ -28,6 +29,7 @@ else:
     MSG_COLORS = defaultdict(str)
     CLEAR_COLOR = ''
 LOG_END = CLEAR_COLOR + '\n'
+LOG_SUPPRESS = set()
 
 class Treasure(namedtuple('Treasure', ['name', 'value', 'weight'])):
     def __str__(self):
@@ -124,8 +126,9 @@ class Player:
         try:
             raw_action = self.bot.get_action(state)
         except Exception as e:
-            print(f"{MSG_COLORS['error']}Exception from {self}: {str(e)}")
-            traceback.print_exc()
+            if 'error' not in LOG_SUPPRESS:
+                print(f"{MSG_COLORS['error']}Exception from {self}: {str(e)}")
+                traceback.print_exc()
             return None
 
         try:
@@ -140,8 +143,9 @@ class Player:
                 elif atype == 'drop':
                     return Drop(*args)
         except TypeError:
-            print(f"{MSG_COLORS['error']}Invalid action from {self}: {raw_action}")
-            traceback.print_exc()
+            if 'error' not in LOG_SUPPRESS:
+                print(f"{MSG_COLORS['error']}Invalid action from {self}: {raw_action}")
+                traceback.print_exc()
             pass
         return None
 
@@ -322,8 +326,9 @@ class Ruins:
             try:
                 player.bot.enter_ruins()
             except Exception:
-                print(f"{MSG_COLORS['error']}Failure to initialize {player.bot}")
-                traceback.print_exc()
+                if 'error' not in LOG_SUPPRESS:
+                    print(f"{MSG_COLORS['error']}Failure to initialize {player.bot}")
+                    traceback.print_exc()
                 self.kill(player, "is dead on arrival.")
 
         while any(player.active for player in self.players.values()):
@@ -391,6 +396,8 @@ class Ruins:
             self.rooms.append(self.generate_room(len(self.rooms) + 1))
 
     def gamelog(self, *message, type='info'):
+        if type in LOG_SUPPRESS:
+            return
         if self.complete:
             prefix = 'Game End'
         elif self.turn_number == 0:
@@ -433,15 +440,65 @@ class GreedyBastard(Adventurer):
         else:
             return 'next'
 
-Ruins(
-    Drunkard,
-    Drunkard,
-    Drunkard,
-    Drunkard,
-    Drunkard,
-    Drunkard,
-    EmoKid,
-    Chad,
-    Coward,
-    GreedyBastard,
-).run_game()
+
+def run_tournament(seed):
+    Ruins(
+        Drunkard,
+        Drunkard,
+        Drunkard,
+        Drunkard,
+        Drunkard,
+        Drunkard,
+        EmoKid,
+        # Chad,
+        Coward,
+        GreedyBastard,
+        seed=seed
+    ).run_game()
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('-d', '--bot-dir', default='ruins_bots')
+    parser.add_argument('--url', help="Download bot code from StackExchange first")
+    parser.add_argument('-s', '--seed', help="Seed to use")
+
+    parser.add_argument(
+        '--debug',
+        action='store_true'
+    )
+    parser.add_argument(
+        '--silent',
+        action='store_true',
+        help="Suppress all log messages"
+    )
+    parser.add_argument(
+        '--quiet',
+        dest='suppress',
+        action='append_const',
+        const={'minor', 'good', 'info'},
+        help="Suppress unimportant log messages."
+    )
+    parser.add_argument(
+        '-x', '--suppress',
+        action='append',
+        type=lambda x: {x},
+        help="Suppress messages of the given type."
+    )
+
+    args = parser.parse_args()
+
+    if args.silent:
+        LOG_SUPPRESS = type('ALL', (), {'__contains__': lambda s,x: True})()
+    elif not args.debug:
+        LOG_SUPPRESS.add('debug')
+    if args.suppress:
+        for levels in args.suppress:
+            LOG_SUPPRESS |= levels
+
+    if args.seed is None:
+        args.seed = ''.join(random.choice('0123456789ABCDEFGHJKLMNPQRSTVWXY') for _ in range(8))
+        if not args.silent
+            print(f"Seed: {MSG_COLORS['major']}{args.seed}{CLEAR_COLOR}")
+
+    run_tournament(args.seed)
