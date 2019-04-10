@@ -2,7 +2,10 @@
 
 import argparse
 import math
+import importlib
 import itertools
+import os.path
+import pkgutil
 import random
 import sys
 import time
@@ -10,6 +13,9 @@ import traceback
 from collections import defaultdict, namedtuple
 from dataclasses import dataclass, field
 from typing import List
+
+import requests
+from lxml import html
 
 # Logging constants
 if sys.stdin.isatty():
@@ -30,6 +36,14 @@ else:
     CLEAR_COLOR = ''
 LOG_END = CLEAR_COLOR + '\n'
 LOG_SUPPRESS = set()
+
+def exception(message=None):
+    if message:
+        print(f"{MSG_COLORS['error']}{message}")
+    else:
+        print(MSG_COLORS['error'], end='')
+    traceback.print_exc()
+    print(CLEAR_COLOR, end='')
 
 class Treasure(namedtuple('Treasure', ['name', 'value', 'weight'])):
     def __str__(self):
@@ -126,9 +140,7 @@ class Player:
         try:
             raw_action = self.bot.get_action(state)
         except Exception as e:
-            if 'error' not in LOG_SUPPRESS:
-                print(f"{MSG_COLORS['error']}Exception from {self}: {str(e)}")
-                traceback.print_exc()
+            exception(f"Exception from {self}: {str(e)}")
             return None
 
         try:
@@ -143,10 +155,7 @@ class Player:
                 elif atype == 'drop':
                     return Drop(*args)
         except TypeError:
-            if 'error' not in LOG_SUPPRESS:
-                print(f"{MSG_COLORS['error']}Invalid action from {self}: {raw_action}")
-                traceback.print_exc()
-            pass
+            exception(f"Invalid action from {self}: {raw_action}")
         return None
 
     @property
@@ -326,9 +335,7 @@ class Ruins:
             try:
                 player.bot.enter_ruins()
             except Exception:
-                if 'error' not in LOG_SUPPRESS:
-                    print(f"{MSG_COLORS['error']}Failure to initialize {player.bot}")
-                    traceback.print_exc()
+                exception(f"Failure to initialize {player.bot}")
                 self.kill(player, "is dead on arrival.")
 
         while any(player.active for player in self.players.values()):
@@ -456,12 +463,62 @@ def run_tournament(seed):
         seed=seed
     ).run_game()
 
+# === META - Loading bots ===
+
+def get_answers(url):
+    try:
+        page = html.fromstring(requests.get(url).text)
+    except Exception:
+        exception("Unable to download bots")
+        sys.exit(2)
+    for answer in page.xpath("//div[@class='answer']"):
+        try:
+            headers = answer.xpath(".//h1")
+            title = headers[0].text_content() if headers else f"Untiltled-{next(untitled)}"
+            user = answer.xpath(".//div[@class='user-details']//a")[-1].text
+            code = answer.xpath(".//pre/code")[0].text
+        except Exception:
+            exception("Unable to extract bot from answer")
+        else:
+            yield code, title, user
+
+
+def sanitize(name):
+    name = '_'.join(name.split())
+    for i, ch in enumerate(name):
+        if ch == '_' or not ch.isalnum():
+            return name[:i]
+    else:
+        return name
+
+def download_bots(url, bot_dir):
+    for code, title, user in get_answers(url):
+        try:
+            module_file = f"{sanitize(user).lower()}_{sanitize(title).lower()}.py"
+            if not module_file[0].isalpha():
+                module_file = 'a_' + module_file
+            with open(os.path.join(bot_dir, module_file), 'w') as f:
+                f.write(f"'''{title}\nby {user}\n'''\n")
+                f.write("from __main__ import Adventurer\n")
+                f.write(code)
+        except Exception:
+            exception()
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-d', '--bot-dir', default='ruins_bots')
     parser.add_argument('--url', help="Download bot code from StackExchange first")
     parser.add_argument('-s', '--seed', help="Seed to use")
+    parser.add_argument(
+        '-1', '--single',
+        action='store_true',
+        help="Run a single game instead of a tournament."
+    )
+    parser.add_argument(
+        '--bot',
+        help="Assert the named bot exists and competes in the tournament/game"
+    )
 
     parser.add_argument(
         '--debug',
@@ -495,10 +552,34 @@ if __name__ == '__main__':
     if args.suppress:
         for levels in args.suppress:
             LOG_SUPPRESS |= levels
+    if 'error' in LOG_SUPPRESS:
+        exception = lambda *_, **__: None
+
+    if args.url:
+        download_bots(args.url, args.bot_dir)
+
+    bot_classes = []
+
+    if os.path.isdir(args.bot_dir):
+        for finder, name, ispkg in pkgutil.walk_packages([os.path.abspath(args.bot_dir)]):
+            if ispkg:
+                continue
+            try:
+                module = finder.find_module(name).load_module(name)
+            except:
+                exception("Recovering from error in import")
+            else:
+                for obj in vars(module).values():
+                    if (    obj is not Adventurer
+                            and isinstance(obj, type)
+                            and issubclass(obj, Adventurer)):
+                        bot_classes.append(obj)
+
+    print(bot_classes)
 
     if args.seed is None:
         args.seed = ''.join(random.choice('0123456789ABCDEFGHJKLMNPQRSTVWXY') for _ in range(8))
-        if not args.silent
+        if not args.silent:
             print(f"Seed: {MSG_COLORS['major']}{args.seed}{CLEAR_COLOR}")
 
-    run_tournament(args.seed)
+    # run_tournament(args.seed)
