@@ -16,21 +16,27 @@ from typing import List
 
 import requests
 from lxml import html
+from tabulate import tabulate
 
 # Logging constants
+MSG_COLORS = defaultdict(
+    lambda: '\x1b[37m', # default value
+    tourney='\x1b[94m',
+    major='\x1b[95m',
+    minor='\x1b[93m',
+    good='\x1b[92m',
+    bad='\x1b[91m',
+    warning='\x1b[33m',
+    error='\x1b[31m',
+    info='\x1b[37m',
+    debug='\x1b[90m',
+    score='\x1b[36m',
+    final='\x1b[96m',
+)
+MSG_TYPES = set(MSG_COLORS)
 if sys.stdin.isatty():
-    MSG_COLORS = defaultdict(
-        lambda: '\x1b[37m', # default value
-        major='\x1b[94m',
-        minor='\x1b[93m',
-        good='\x1b[92m',
-        bad='\x1b[91m',
-        warning='\x1b[33m',
-        error='\x1b[31m',
-        info='\x1b[37m',
-        debug='\x1b[90m',
-    )
     CLEAR_COLOR = '\x1b[0m'
+    MSG_COLORS['seed'] = '\x1b[94m'
 else:
     MSG_COLORS = defaultdict(str)
     CLEAR_COLOR = ''
@@ -39,11 +45,11 @@ LOG_SUPPRESS = set()
 
 def exception(message=None):
     if message:
-        print(f"{MSG_COLORS['error']}{message}")
+        print(f"{MSG_COLORS['error']}{message}", file=sys.stdout)
     else:
-        print(MSG_COLORS['error'], end='')
+        print(MSG_COLORS['error'], end='', file=sys.stdout)
     traceback.print_exc()
-    print(CLEAR_COLOR, end='')
+    print(CLEAR_COLOR, end='', file=sys.stdout)
 
 class Treasure(namedtuple('Treasure', ['name', 'value', 'weight'])):
     def __str__(self):
@@ -364,12 +370,24 @@ class Ruins:
         ]
 
         self.gamelog(scores[0][0], "won the game", type='good')
-        self.gamelog("Score for this game:")
-        for player, score in scores:
-            self.gamelog(
-                f"{score:>4} -- {player} "
-                f"[{f'${player.total_value}' if player.alive else 'DEAD'}]"
-            )
+        self.gamelog("Score for this game:", type='score')
+        self.gamelog_lines(
+            tabulate(
+                [
+                    [
+                        player.bot.__class__.__name__,
+                        player.name,
+                        f'${player.total_value}' if player.alive else 'DEAD',
+                        score,
+                    ]
+                    for player, score in scores
+                ],
+                headers=['Bot Class', 'Character', 'Money', 'Score'],
+                colalign=['left',     'left',      'right', 'right'],
+                tablefmt='presto'
+            ).splitlines(),
+            type='score'
+        )
 
         return scores
 
@@ -402,7 +420,7 @@ class Ruins:
         while len(self.rooms) < room:
             self.rooms.append(self.generate_room(len(self.rooms) + 1))
 
-    def gamelog(self, *message, type='info'):
+    def gamelog(self, *message, type='info', end='', **kwargs):
         if type in LOG_SUPPRESS:
             return
         if self.complete:
@@ -411,7 +429,21 @@ class Ruins:
             prefix = 'Pregame'
         else:
             prefix = f"Turn {self.turn_number:03}"
-        print(f"{MSG_COLORS[type]}[{prefix}]", *message, end=LOG_END)
+        print(f"{MSG_COLORS[type]}[{prefix}]", *message, end=(LOG_END+end), **kwargs)
+
+    def gamelog_lines(self, lines, type='info'):
+        if type in LOG_SUPPRESS:
+            return
+        if self.complete:
+            prefix = 'Game End'
+        elif self.turn_number == 0:
+            prefix = 'Pregame'
+        else:
+            prefix = f"Turn {self.turn_number:03}"
+        print(MSG_COLORS[type], end='')
+        for line in lines:
+            print(f"[{prefix}] {line}")
+        print(CLEAR_COLOR, end='')
 
     def snapshot(self, player):
         return RoomState(
@@ -426,46 +458,56 @@ class Ruins:
             player.stamina
         )
 
+def run_tournament(
+    bots,
+    game_size=10,
+    pool_games=20,
+    required_lead=15,
+    seed=None
+):
+    rand = random.Random(seed)
+    def tourneylog(*message, type='tourney', end='', **kwargs):
+        if type in LOG_SUPPRESS:
+            return
+        print(f"{MSG_COLORS[type]}[=TOURNEY=]", *message, end=(LOG_END+end), **kwargs)
 
-# Adventurers for testing (These intentionally lose)
-class EmoKid(Adventurer):
-    def get_action(self, state):
-        return 'drop', 0
+    bot_sample = bots[:]
+    while len(bot_sample) < game_size:
+        bot_sample.append(Drunkard)
+    Ruins(*bot_sample, seed=rand).run_game()
 
-class Chad(Adventurer):
-    def get_action(self, state):
-        return 'next'
-
-class Coward(Adventurer):
-    def get_action(self, state):
-        return 'previous'
-
-class GreedyBastard(Adventurer):
-    def get_action(self, state):
-        if state.treasures:
-            return 'take', 0, state.treasures[0].weight * 2
-        else:
-            return 'next'
-
-
-def run_tournament(seed):
-    Ruins(
-        Drunkard,
-        Drunkard,
-        Drunkard,
-        Drunkard,
-        Drunkard,
-        Drunkard,
-        EmoKid,
-        # Chad,
-        Coward,
-        GreedyBastard,
-        seed=seed
-    ).run_game()
+    # Batching test - some is [TEMP]
+    # full_pool = list('ABCDEFGHIJKLMNO') #TEMP
+    full_pool = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ') #TEMP
+    game_counts = {bot: 0 for bot in full_pool} #TEMP
+    carryover = []
+    for pool_round in range(pool_games):
+        tourneylog("Starting round", pool_round + 1, "of the pool")
+        rand.shuffle(full_pool)
+        pool = carryover
+        carryover = []
+        for bot in full_pool:
+            while len(pool) >= game_size:
+                for b in pool[:game_size]:
+                    game_counts[b] += 1
+                print(*pool[:game_size]) #TEMP
+                pool = pool[game_size:]
+            if bot in pool:
+                carryover.append(bot)
+            else:
+                pool.append(bot)
+        print("Leftover:", *carryover, '|', *pool)
+        carryover += pool
+        while len(carryover) >= game_size:
+            for b in carryover[:game_size]:
+                game_counts[b] += 1
+            print(*carryover[:game_size]) #TEMP
+            carryover = carryover[game_size:]
+    print(*game_counts.items())
 
 # === META - Loading bots ===
 
-def get_answers(url):
+def scrape_page(url):
     try:
         page = html.fromstring(requests.get(url).text)
     except Exception:
@@ -474,7 +516,7 @@ def get_answers(url):
     for answer in page.xpath("//div[@class='answer']"):
         try:
             headers = answer.xpath(".//h1")
-            title = headers[0].text_content() if headers else f"Untiltled-{next(untitled)}"
+            title = headers[0].text_content()
             user = answer.xpath(".//div[@class='user-details']//a")[-1].text
             code = answer.xpath(".//pre/code")[0].text
         except Exception:
@@ -486,17 +528,17 @@ def get_answers(url):
 def sanitize(name):
     name = '_'.join(name.split())
     for i, ch in enumerate(name):
-        if ch == '_' or not ch.isalnum():
+        if ch != '_' and not ch.isalnum():
             return name[:i]
     else:
         return name
 
 def download_bots(url, bot_dir):
-    for code, title, user in get_answers(url):
+    for code, title, user in scrape_page(url):
         try:
-            module_file = f"{sanitize(user).lower()}_{sanitize(title).lower()}.py"
+            module_file = f"{sanitize(user).lower()}__{sanitize(title).lower()}.py"
             if not module_file[0].isalpha():
-                module_file = 'a_' + module_file
+                module_file = 'a__' + module_file
             with open(os.path.join(bot_dir, module_file), 'w') as f:
                 f.write(f"'''{title}\nby {user}\n'''\n")
                 f.write("from __main__ import Adventurer\n")
@@ -507,51 +549,58 @@ def download_bots(url, bot_dir):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
+    parser.add_argument('-s', '--seed', help="Seed to use")
+
     parser.add_argument('-d', '--bot-dir', default='ruins_bots')
     parser.add_argument('--url', help="Download bot code from StackExchange first")
-    parser.add_argument('-s', '--seed', help="Seed to use")
     parser.add_argument(
         '-1', '--single',
         action='store_true',
         help="Run a single game instead of a tournament."
     )
-    parser.add_argument(
-        '--bot',
-        help="Assert the named bot exists and competes in the tournament/game"
-    )
 
-    parser.add_argument(
+    logmodes = parser.add_mutually_exclusive_group()
+    logmodes.add_argument(
         '--debug',
-        action='store_true'
+        action='store_true',
+        help='Show all game log messages.'
     )
-    parser.add_argument(
+    logmodes.add_argument(
         '--silent',
         action='store_true',
         help="Suppress all log messages"
     )
-    parser.add_argument(
-        '--quiet',
-        dest='suppress',
-        action='append_const',
-        const={'minor', 'good', 'info'},
+    logmodes.add_argument(
+        '-q', '--quiet',
+        action='store_true',
         help="Suppress unimportant log messages."
     )
     parser.add_argument(
         '-x', '--suppress',
         action='append',
-        type=lambda x: {x},
-        help="Suppress messages of the given type."
+        default=[],
+        choices=MSG_TYPES,
+        metavar='TYPE',
+        help=f"Suppress messages of the given type. (One of: {', '.join(MSG_TYPES)})"
+        " This option can be specified multiple times."
     )
 
     args = parser.parse_args()
 
+    if args.debug and args.suppress:
+        parser.error("Cannot pass --suppress and --debug together.")
+
     if args.silent:
         LOG_SUPPRESS = type('ALL', (), {'__contains__': lambda s,x: True})()
-    elif not args.debug:
+    elif args.quiet:
+        LOG_SUPPRESS |= {'minor', 'good', 'info'}
+        if not args.single:
+            LOG_SUPPRESS.add('score')
+
+    if not args.debug:
         LOG_SUPPRESS.add('debug')
-    if args.suppress:
-        for levels in args.suppress:
-            LOG_SUPPRESS |= levels
+
+    LOG_SUPPRESS.update(args.suppress)
     if 'error' in LOG_SUPPRESS:
         exception = lambda *_, **__: None
 
@@ -559,7 +608,6 @@ if __name__ == '__main__':
         download_bots(args.url, args.bot_dir)
 
     bot_classes = []
-
     if os.path.isdir(args.bot_dir):
         for finder, name, ispkg in pkgutil.walk_packages([os.path.abspath(args.bot_dir)]):
             if ispkg:
@@ -575,11 +623,12 @@ if __name__ == '__main__':
                             and issubclass(obj, Adventurer)):
                         bot_classes.append(obj)
 
-    print(bot_classes)
-
     if args.seed is None:
         args.seed = ''.join(random.choice('0123456789ABCDEFGHJKLMNPQRSTVWXY') for _ in range(8))
         if not args.silent:
-            print(f"Seed: {MSG_COLORS['major']}{args.seed}{CLEAR_COLOR}")
+            print(f"Seed: {MSG_COLORS['seed']}{args.seed}{CLEAR_COLOR}")
 
-    # run_tournament(args.seed)
+    if args.single:
+        Ruins(*bot_classes, seed=args.seed).run_game()
+    else:
+        run_tournament(bot_classes, seed=args.seed)
