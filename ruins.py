@@ -54,6 +54,54 @@ def exception(message=None):
     traceback.print_exc()
     print(CLEAR_COLOR, end='', file=sys.stdout)
 
+
+# Name Pool (for adventurer names)
+
+FIRST_NAMES = [
+    'Eddard', 'Rob', 'Jon', 'Sansa', 'Theon', 'Arya', 'Brandon', 'Richard',
+    'Hodor', 'Jaime', 'Cersei', 'Tyrion', 'Tywin', 'Robert', 'Joffrey',
+    'Tommen', 'Dany', 'Samwell', 'Marjorie', 'Stannis', 'Peter', 'Jora',
+    'Bilbo', 'Frodo', 'Sam', 'Legolas', 'Gimley', 'Gandalf', 'Ned', 'Albert',
+    'Lyn', 'Eliwood', 'Hector', 'Guy', 'Kent', 'Dorcas', 'Fiora', 'Ike',
+    'Marth', 'Roy', 'Lucina', 'Corrin', 'Robin', 'Chrom', 'Anna', 'Ramsey',
+    'Alexander', 'James', 'John', 'Jacob', 'Deborah', 'Rebecca', 'Willard',
+    'Zeus', 'Athena', 'Apollo', 'Diana', 'Juno', 'Hera', 'Icarus', 'Samson',
+    'Chell', 'Gordon', 'Samus', 'Link', 'Edward', 'Alphonse', 'Winry', 'Fox',
+    'Mario', 'Luigi', 'Ash', 'Brock', 'Misty', 'Winston', 'Torbjorn', 'Angela',
+    'Kirby', 'Masahiro', 'Shigeru', 'Lucy', 'Freddie', 'Patrick', 'Aerith',
+    'Cloud', 'Tifa', 'Barret', 'Red', 'Blue', 'Gary', 'Chara', 'Usagi',
+    'Ajna', 'Morgan', 'Steve', 'Harry', 'Jack', 'Homer', 'Bart', 'Lisa',
+    'Elsa', 'Ana', 'Emma', 'Regina', 'Mary', 'Margaret', 'Pit', 'Brad'
+    # Signing off
+    'Justin'
+]
+
+LAST_NAMES = [
+    'Stark', 'Barathean', 'Lannister', 'Snow', 'Tarley', 'Grayjoy', 'Bolton',
+    'Stormborn', 'Targaryen', 'Balish', 'Mormant', 'Baggins',
+    'Freeman', 'Aran', 'Elric', 'Rockbell', 'McCloud', 'Lombardi', 'Smith',
+    'Lindholm', 'Ketchum', 'Sakurai', 'Miyamoto', 'Heartfilia', 'Mercury',
+    'Oak', 'Elm', 'Birch', 'Tsukino', 'Strife', 'Lockheart', 'Jackson',
+    'Potter', 'Sparrow', 'Simpson', 'Flanders', 'Young', 'Einstein', 'Swan',
+]
+
+NAME_SUFFIXES = [
+    'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XIII',
+    'Jr.', 'Sr.'
+]
+
+MONIKERS = [
+    'the Great', 'the Smuggler', 'the Cat Burglar', 'the Insomniac',
+    'the Forgettable', 'the Orphan', 'the Wizard', 'the Lazy',
+    'the Untamed', 'the Well-armed', 'the Pirate', 'the Unimportant',
+    'the Hero', 'the Unkempt', 'the Distasteful', 'the Dog Whisperer',
+    'the Peasant', 'the Impaler', 'of Arendale', 'the Simpleton'
+]
+
+# lol Cloud McCloud is possible.
+
+# === Data structures for the game ===
+
 class Treasure(namedtuple('Treasure', ['name', 'value', 'weight'])):
     def __str__(self):
         return f"{self.name} (${self.value}, {self.weight}kg)"
@@ -192,7 +240,6 @@ class Ruins:
     def __init__(self, *adventurers, seed=None):
         assert adventurers
         self.random = random.Random(seed)
-        self.adv_num = itertools.count(1)
         self.treasure_num = itertools.count(1)
         self.players = {
             name: Player(name, adventurer(name, self.new_seed()))
@@ -209,7 +256,15 @@ class Ruins:
         return random.Random(self.random.getrandbits(744))
 
     def generate_name(self):
-        return f"Adventurer #{next(self.adv_num)}"
+        r = self.random.random()
+        parts = [self.random.choice(FIRST_NAMES)]
+        if r < 0.75:
+            parts.append(self.random.choice(LAST_NAMES))
+            if r < 0.15:
+                parts.append(self.random.choice(NAME_SUFFIXES))
+        else:
+            parts.append(self.random.choice(MONIKERS))
+        return ' '.join(parts)
 
     def ndr(self, n, r):
         return sum(self.random.randint(1, r) for _ in range(n))
