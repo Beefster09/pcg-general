@@ -2,6 +2,7 @@
 
 import argparse
 import math
+import heapq
 import importlib
 import itertools
 import os.path
@@ -24,7 +25,7 @@ MSG_COLORS = defaultdict(
     tourney='\x1b[94m',
     major='\x1b[95m',
     minor='\x1b[93m',
-    good='\x1b[92m',
+    good='\x1b[32m',
     bad='\x1b[91m',
     warning='\x1b[33m',
     error='\x1b[31m',
@@ -32,6 +33,8 @@ MSG_COLORS = defaultdict(
     debug='\x1b[90m',
     score='\x1b[36m',
     final='\x1b[96m',
+    pool='\x1b[96m',
+    winner='\x1b[92m',
 )
 MSG_TYPES = set(MSG_COLORS)
 if sys.stdin.isatty():
@@ -203,7 +206,7 @@ class Ruins:
         self.complete = False
 
     def new_seed(self):
-        return random.Random(self.random.getrandbits(1024))
+        return random.Random(self.random.getrandbits(744))
 
     def generate_name(self):
         return f"Adventurer #{next(self.adv_num)}"
@@ -219,6 +222,78 @@ class Ruins:
     def generate_room(self, room):
         n_treasures = self.random.randint(room // 3 + 3, room // 2 + 5)
         return [self.generate_treasure(room) for _ in range(n_treasures)]
+
+    def ensure_room(self, room):
+        while len(self.rooms) < room:
+            self.rooms.append(self.generate_room(len(self.rooms) + 1))
+
+    def kill(self, player, message=Trap):
+        if message is Trap:
+            message = random.choice([
+                # Yes, this is the global random.
+                # This is cosmetic and must not interfere with room generation
+                "was sliced in half by a swinging blade trap.",
+                "fell into a pit of spikes.",
+                "was crushed by a boulder.",
+                "was eaten by a wild shriekbat.",
+                "was shot by a crossbow trap.",
+                "fell into a bottomless pit.",
+                "was devoured by a mimic.",
+                "was incinerated by a fire trap.",
+                "got sucked into a dimensional vortex.",
+                "mysteriously vanished.",
+                "was flung into a pool of acid.",
+                "was stung by a giant bee.",
+                "was absorbed by a gelatinous monster.",
+                "was bitten by a swarm of venomous snakes.",
+                "was decapitated by a sword trap"
+            ])
+        self.gamelog(player, message, type='bad')
+        player.stamina = 0
+        if player.treasures:
+            self.rooms[player.room - 1] += player.treasures
+            self.gamelog(f"{player.name} dropped these items into room {player.room}:", type='debug')
+            for treasure in player.treasures:
+                self.gamelog(treasure, type='debug')
+            player.treasures = []
+
+    def gamelog(self, *message, type='info', end='', **kwargs):
+        if type in LOG_SUPPRESS:
+            return
+        if self.complete:
+            prefix = 'Game End'
+        elif self.turn_number == 0:
+            prefix = 'Pregame'
+        else:
+            prefix = f"Turn {self.turn_number:03}"
+        print(f"{MSG_COLORS[type]}[{prefix}]", *message, end=(LOG_END+end), **kwargs)
+
+    def gamelog_lines(self, lines, type='info'):
+        if type in LOG_SUPPRESS:
+            return
+        if self.complete:
+            prefix = 'Game End'
+        elif self.turn_number == 0:
+            prefix = 'Pregame'
+        else:
+            prefix = f"Turn {self.turn_number:03}"
+        print(MSG_COLORS[type], end='')
+        for line in lines:
+            print(f"[{prefix}] {line}")
+        print(CLEAR_COLOR, end='')
+
+    def snapshot(self, player):
+        return RoomState(
+            player.room,
+            list(self.rooms[player.room - 1]),
+            [
+                other.name
+                for other in self.players.values()
+                if other is not player and other.room == player.room
+            ],
+            list(player.treasures),
+            player.stamina
+        )
 
     def turn(self):
         self.turn_number += 1
@@ -391,119 +466,133 @@ class Ruins:
 
         return scores
 
-    def kill(self, player, message=Trap):
-        if message is Trap:
-            message = random.choice([
-                # Yes, this is the global random.
-                # This is cosmetic and shouldn't interfere with room generation
-                "was sliced in half by a blade trap.",
-                "fell into a pit of spikes.",
-                "was crushed by a boulder.",
-                "was eaten by a wild shriekbat.",
-                "was shot by a crossbow trap.",
-                "fell into a bottomless pit.",
-                "was devoured by a mimic.",
-                "was incinerated by a fire trap.",
-                "got sucked into a dimensional vortex.",
-                "mysteriously vanished."
-            ])
-        self.gamelog(player, message, type='bad')
-        player.stamina = 0
-        if player.treasures:
-            self.rooms[player.room - 1] += player.treasures
-            self.gamelog(f"{player.name} dropped these items into room {player.room}:", type='debug')
-            for treasure in player.treasures:
-                self.gamelog(treasure, type='debug')
-            player.treasures = []
-
-    def ensure_room(self, room):
-        while len(self.rooms) < room:
-            self.rooms.append(self.generate_room(len(self.rooms) + 1))
-
-    def gamelog(self, *message, type='info', end='', **kwargs):
-        if type in LOG_SUPPRESS:
-            return
-        if self.complete:
-            prefix = 'Game End'
-        elif self.turn_number == 0:
-            prefix = 'Pregame'
-        else:
-            prefix = f"Turn {self.turn_number:03}"
-        print(f"{MSG_COLORS[type]}[{prefix}]", *message, end=(LOG_END+end), **kwargs)
-
-    def gamelog_lines(self, lines, type='info'):
-        if type in LOG_SUPPRESS:
-            return
-        if self.complete:
-            prefix = 'Game End'
-        elif self.turn_number == 0:
-            prefix = 'Pregame'
-        else:
-            prefix = f"Turn {self.turn_number:03}"
-        print(MSG_COLORS[type], end='')
-        for line in lines:
-            print(f"[{prefix}] {line}")
-        print(CLEAR_COLOR, end='')
-
-    def snapshot(self, player):
-        return RoomState(
-            player.room,
-            list(self.rooms[player.room - 1]),
-            [
-                other.name
-                for other in self.players.values()
-                if other is not player and other.room == player.room
-            ],
-            list(player.treasures),
-            player.stamina
-        )
-
 def run_tournament(
     bots,
     game_size=10,
     pool_games=20,
-    required_lead=15,
+    required_lead=50,
+    max_final_games=500,
     seed=None
 ):
     rand = random.Random(seed)
     def tourneylog(*message, type='tourney', end='', **kwargs):
         if type in LOG_SUPPRESS:
             return
-        print(f"{MSG_COLORS[type]}[=TOURNEY=]", *message, end=(LOG_END+end), **kwargs)
+        print(f"{MSG_COLORS[type]}[==TOURNAMENT==]", *message, end=(LOG_END+end), **kwargs)
 
-    bot_sample = bots[:]
-    while len(bot_sample) < game_size:
-        bot_sample.append(Drunkard)
-    Ruins(*bot_sample, seed=rand).run_game()
+    full_pool = bots[:]
+    scores = {
+        bot_class.__name__: 0
+        for bot_class in full_pool
+    }
+    bots_by_name = {
+        bot_class.__name__: bot_class
+        for bot_class in full_pool
+    }
 
-    # Batching test - some is [TEMP]
-    # full_pool = list('ABCDEFGHIJKLMNO') #TEMP
-    full_pool = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ') #TEMP
-    game_counts = {bot: 0 for bot in full_pool} #TEMP
-    carryover = []
-    for pool_round in range(pool_games):
-        tourneylog("Starting round", pool_round + 1, "of the pool")
-        rand.shuffle(full_pool)
-        pool = carryover
+    def run_game(bots):
+        game = Ruins(*bots, seed=rand.getrandbits(1337))
+        for player, score in game.run_game():
+            if not isinstance(player.bot, Drunkard):
+                scores[type(player.bot).__name__] += score
+
+    if len(full_pool) > game_size:
+        tourneylog(
+            f"Since there are more than {game_size} bots in the tournament,"
+            " a pool will be run to determine which bots will compete in the final series."
+        )
+        game_counts = {bot.__name__: 0 for bot in full_pool} #TEMP
         carryover = []
-        for bot in full_pool:
-            while len(pool) >= game_size:
-                for b in pool[:game_size]:
-                    game_counts[b] += 1
-                print(*pool[:game_size]) #TEMP
-                pool = pool[game_size:]
-            if bot in pool:
-                carryover.append(bot)
-            else:
-                pool.append(bot)
-        print("Leftover:", *carryover, '|', *pool)
-        carryover += pool
-        while len(carryover) >= game_size:
-            for b in carryover[:game_size]:
-                game_counts[b] += 1
-            print(*carryover[:game_size]) #TEMP
-            carryover = carryover[game_size:]
-    print(*game_counts.items())
+        for pool_round in range(pool_games):
+            tourneylog("Starting round", pool_round + 1, "of the pool")
+            rand.shuffle(full_pool)
+            pool = carryover
+            carryover = []
+            for bot in full_pool:
+                while len(pool) >= game_size:
+                    for b in pool[:game_size]:
+                        game_counts[b.__name__] += 1
+                    run_game(pool[:game_size])
+                    pool = pool[game_size:]
+                if bot in pool:
+                    carryover.append(bot)
+                else:
+                    pool.append(bot)
+            carryover += pool
+            while len(carryover) >= game_size:
+                for b in carryover[:game_size]:
+                    game_counts[b.__name__] += 1
+                run_game(carryover[:game_size])
+                carryover = carryover[game_size:]
+        tourneylog("Making sure an equal number of games were played by each bot...", type='debug')
+        for botname, count in game_counts.items():
+            tourneylog(
+                botname, 'played', count, 'games.',
+                type=('debug' if count == pool_games else 'warning')
+            )
+
+        ranked_bots = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        tourneylog("Results from pool series:", type='pool')
+
+        for line in tabulate(
+            [
+                (botname, score, format(score / pool_games, '.03f'))
+                for botname, score in ranked_bots
+            ],
+            headers=['Bot Class', 'Score', 'Mean Score'],
+            tablefmt='presto'
+        ).splitlines():
+            tourneylog(line, type='pool')
+
+        finalists = [
+            bots_by_name[botname]
+            for botname, _ in ranked_bots[:game_size]
+        ]
+        scores = {
+            bot_class.__name__: 0
+            for bot_class in finalists
+        }
+
+    else:
+        finalists = full_pool
+        if len(finalists) < game_size:
+            tourneylog(
+                "Since there aren't enough bots, remaining slots will be filled in with Drunkards",
+                type='warning'
+            )
+            while len(finalists) < game_size:
+                finalists.append(Drunkard)
+
+    finalist_game = 0
+    while True:
+        finalist_game += 1
+        tourneylog(f"Starting game {finalist_game} of the final round.")
+        run_game(finalists)
+        if finalist_game >= max_final_games:
+            tourneylog("Maximum number of finalist games run!", type='warning')
+            break
+        first, second = heapq.nlargest(2, scores.values())
+        if first - second >= required_lead:
+            tourneylog(
+                f"The first place bot has achieved a {first - second} point lead over the"
+                " second place bot!"
+            )
+            break
+
+    ranked_bots = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    tourneylog("The tournament has completed successfully!")
+    tourneylog("Final scores of the finalists:", type='final')
+    for line in tabulate(
+            [
+                (botname, score, format(score / finalist_game, '.03f'))
+                for botname, score in ranked_bots
+            ],
+            headers=['Bot Class', 'Score', 'Mean Score'],
+            tablefmt='presto'
+        ).splitlines():
+            tourneylog(line, type='final')
+
+    tourneylog(f"The winner of the tournament is {ranked_bots[0][0]}!", type='winner')
 
 # === META - Loading bots ===
 
@@ -557,6 +646,8 @@ if __name__ == '__main__':
         '-1', '--single',
         action='store_true',
         help="Run a single game instead of a tournament."
+        " This will not limit the maximum number of adventurers in the ruins"
+        " or fill in empty slots with Drunkards."
     )
 
     logmodes = parser.add_mutually_exclusive_group()
@@ -577,25 +668,35 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '-x', '--suppress',
-        action='append',
+        nargs='+',
         default=[],
         choices=MSG_TYPES,
         metavar='TYPE',
         help=f"Suppress messages of the given type. (One of: {', '.join(MSG_TYPES)})"
-        " This option can be specified multiple times."
+    )
+    logmodes.add_argument(
+        '-o', '--only',
+        nargs='+',
+        choices=MSG_TYPES,
+        metavar='TYPE',
+        help="Only show messages of the given types. (Same options as --suppress)"
     )
 
     args = parser.parse_args()
 
     if args.debug and args.suppress:
         parser.error("Cannot pass --suppress and --debug together.")
+    if args.only and args.suppress:
+        parser.error("Cannot pass --suppress and --only together.")
 
     if args.silent:
         LOG_SUPPRESS = type('ALL', (), {'__contains__': lambda s,x: True})()
     elif args.quiet:
         LOG_SUPPRESS |= {'minor', 'good', 'info'}
         if not args.single:
-            LOG_SUPPRESS.add('score')
+            LOG_SUPPRESS.update({'score', 'major', 'bad'})
+    elif args.only:
+        LOG_SUPPRESS = MSG_TYPES - set(args.only)
 
     if not args.debug:
         LOG_SUPPRESS.add('debug')
