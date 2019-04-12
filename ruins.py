@@ -55,7 +55,7 @@ def exception(message=None):
     print(CLEAR_COLOR, end='', file=sys.stdout)
 
 
-# Name Pool (for adventurer names)
+# Name Pool (for adventurers)
 
 FIRST_NAMES = [
     'Eddard', 'Rob', 'Jon', 'Sansa', 'Theon', 'Arya', 'Brandon', 'Richard',
@@ -71,23 +71,25 @@ FIRST_NAMES = [
     'Kirby', 'Masahiro', 'Shigeru', 'Lucy', 'Freddie', 'Patrick', 'Aerith',
     'Cloud', 'Tifa', 'Barret', 'Red', 'Blue', 'Gary', 'Chara', 'Usagi',
     'Ajna', 'Morgan', 'Steve', 'Harry', 'Jack', 'Homer', 'Bart', 'Lisa',
-    'Elsa', 'Ana', 'Emma', 'Regina', 'Mary', 'Margaret', 'Pit', 'Brad'
+    'Elsa', 'Ana', 'Emma', 'Regina', 'Mary', 'Margaret', 'Pit', 'Brad',
+    'Sonja', 'Ryu', 'Ken', 'Olivia', 'Major', 'Ron', 'Quinn', 'Elmer',
     # Signing off
     'Justin'
 ]
 
 LAST_NAMES = [
     'Stark', 'Barathean', 'Lannister', 'Snow', 'Tarley', 'Grayjoy', 'Bolton',
-    'Stormborn', 'Targaryen', 'Balish', 'Mormant', 'Baggins',
+    'Stormborn', 'Targaryen', 'Balish', 'Mormant', 'Baggins', 'Churchill',
     'Freeman', 'Aran', 'Elric', 'Rockbell', 'McCloud', 'Lombardi', 'Smith',
     'Lindholm', 'Ketchum', 'Sakurai', 'Miyamoto', 'Heartfilia', 'Mercury',
     'Oak', 'Elm', 'Birch', 'Tsukino', 'Strife', 'Lockheart', 'Jackson',
     'Potter', 'Sparrow', 'Simpson', 'Flanders', 'Young', 'Einstein', 'Swan',
+    'Parker', 'Harris', 'Moore', 'Barnes', 'Finley', 'Pitt', 'Ridley'
 ]
 
 NAME_SUFFIXES = [
     'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XIII',
-    'Jr.', 'Sr.'
+    'Jr.', 'Sr.', 'PhD', 'MD', 'DDS'
 ]
 
 MONIKERS = [
@@ -684,8 +686,11 @@ def download_bots(url, bot_dir):
             if not module_file[0].isalpha():
                 module_file = 'a__' + module_file
             with open(os.path.join(bot_dir, module_file), 'w') as f:
-                f.write(f"'''{title}\nby {user}\n'''\n")
-                f.write("from __main__ import Adventurer\n")
+                f.write(
+                    f"'''{title}\nby {user}\n'''\n"
+                    "from __main__ import Adventurer\n"
+                    "print = lambda *_, **__: None\n\n"
+                )
                 f.write(code)
         except Exception:
             exception()
