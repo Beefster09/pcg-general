@@ -6,6 +6,7 @@ import heapq
 import importlib
 import itertools
 import os.path
+import pickle
 import pkgutil
 import random
 import sys
@@ -247,6 +248,10 @@ class Ruins:
 
     def __init__(self, *adventurers, seed=None):
         assert adventurers
+        if seed is None:
+            seed = random.getrandbits(6969)
+        self._seed_obj = [adv.__name__ for adv in adventurers], seed
+        self._replay_saved = False
         self.random = random.Random(seed)
         # create a separate random instance for flavor so that deaths and other
         # flavorful events don't interfere with treasure generation
@@ -262,6 +267,23 @@ class Ruins:
         self.rooms = [self.generate_room(1)]
         self.turn_number = 0
         self.complete = False
+
+    @classmethod
+    def from_replay(cls, replay_file, candidates):
+        with open(replay_file, 'rb') as f:
+            adv_names, seed = pickle.load(f)
+        cand = {
+            botclass.__name__: botclass
+            for botclass in [*candidates, Drunkard]
+        }
+        adventurers = [cand[name] for name in adv_names]
+        return cls(*adventurers, seed=seed)
+
+    def save_replay(self, replay_file):
+        if not self._replay_saved:
+            with open(replay_file, 'wb') as f:
+                pickle.dump(self._seed_obj, f)
+            self._replay_saved = True
 
     def new_seed(self):
         return random.Random(self.random.getrandbits(744))
@@ -322,7 +344,14 @@ class Ruins:
                 self.gamelog(treasure, type='debug')
             player.treasures = []
         if type(player.bot).__name__ in self.pause_on_death:
-            input('Press enter to continue...')
+            if self._replay_saved:
+                input('Press enter to continue...')
+            else:
+                filename = input('Save a replay? (enter a name) ')
+                if filename:
+                    self.save_replay(filename + '.seed')
+                    if input('Exit? ').lower().startswith('y'):
+                        sys.exit(1)
 
     def gamelog(self, *message, type='info', end='', **kwargs):
         if type in LOG_SUPPRESS:
@@ -734,10 +763,24 @@ def download_bots(url, bot_dir):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-s', '--seed', help="Seed to use")
+    parser.add_argument(
+        '-s', '--seed',
+        help="Seed to use"
+    )
+    parser.add_argument(
+        '-r', '--replay',
+        help="Run from a replay file."
+    )
 
-    parser.add_argument('-d', '--bot-dir', default='ruins_bots')
-    parser.add_argument('--url', help="Download bot code from StackExchange first")
+    parser.add_argument(
+        '-d',
+        '--bot-dir',
+        default='ruins_bots'
+    )
+    parser.add_argument(
+        '--url',
+        help="Download bot code from StackExchange first"
+    )
     parser.add_argument(
         '-1', '--single',
         action='store_true',
@@ -832,12 +875,17 @@ if __name__ == '__main__':
 
     Ruins.pause_on_death = args.pause_on_death
 
-    if args.seed is None:
-        args.seed = ''.join(random.choice('0123456789ABCDEFGHJKLMNPQRSTVWXY') for _ in range(8))
-        if not args.silent:
-            print(f"Seed: {MSG_COLORS['seed']}{args.seed}{CLEAR_COLOR}")
-
-    if args.single:
-        Ruins(*bot_classes, seed=args.seed).run_game()
+    if args.replay:
+        Ruins.from_replay(args.replay, [*bot_classes, Drunkard]).run_game()
     else:
-        run_tournament(bot_classes, seed=args.seed)
+        if args.seed is None:
+            args.seed = ''.join(
+                random.choice('0123456789ABCDEFGHJKLMNPQRSTVWXY') for _ in range(8)
+            )
+            if not args.silent:
+                print(f"Seed: {MSG_COLORS['seed']}{args.seed}{CLEAR_COLOR}")
+
+        if args.single:
+            Ruins(*bot_classes, seed=args.seed).run_game()
+        else:
+            run_tournament(bot_classes, seed=args.seed)
