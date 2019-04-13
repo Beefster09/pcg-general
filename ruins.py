@@ -661,10 +661,10 @@ def run_tournament(
         if finalist_game >= max_final_games:
             tourneylog("Maximum number of finalist games run!", type='warning')
             break
-        if sum(scores.values()) == 0:
-            tourneylog("All competitors seem to have died. Oh dear.", type='bad')
+        if len(scores) < 2:
+            tourneylog("There aren't enough competitors. Exiting.", type='bad')
             return
-        first, second = heapq.nlargest(2, scores.values()) + [0]
+        first, second = heapq.nlargest(2, scores.values())
         if first - second >= required_lead:
             tourneylog(
                 f"The first place bot has achieved a {first - second} point lead over the"
