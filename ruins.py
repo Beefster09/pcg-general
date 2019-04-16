@@ -453,7 +453,9 @@ class Ruins:
                                 len(player.treasures)
                             } treasures, totaling ${
                                 player.total_value
-                            } in value.""",
+                            } in value, and {
+                                player.carry_weight
+                            }kg in weight.""",
                             type='minor'
                         )
                 else:
