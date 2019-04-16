@@ -38,7 +38,28 @@ MSG_COLORS = defaultdict(
     winner='\x1b[92m',
 )
 MSG_TYPES = set(MSG_COLORS)
-if sys.stdin.isatty():
+
+def system_color_support():
+    import platform
+    if platform.system() == 'Windows':
+        if platform.release() == '10':
+            try:
+                import winreg
+                top_key = winreg.ConnectRegistry(None, winreg.HKEY_CURRENT_USER)
+                console = winreg.OpenKey(top_key, 'Console')
+                ansi_on, rtype = winreg.QueryValueEx(console, 'VirtualTerminalLevel')
+                return bool(ansi_on)
+            except (ImportError, FileNotFoundError):
+                traceback.print_exc()
+                return False
+            else:
+                return True
+        else:
+            return False
+    else:
+        return 'xterm' in os.environ.get('TERM', '')
+
+if sys.stdin.isatty() and system_color_support():
     CLEAR_COLOR = '\x1b[0m'
     MSG_COLORS['seed'] = '\x1b[94m'
 else:
