@@ -28,8 +28,23 @@ try:
     from tabulate import tabulate
 except ImportError:
     print("tabulate not found. Using fallback.", file=sys.stderr)
-    def tabulate(lines, headers, **_):
-        return '\n'.join(['\t'.join(map(str, row)) for row in [headers, ['-' * 30], *lines]])
+    def tabulate(rows, headers, **_):
+        sizes = []
+        for i in range(len(rows[0])):
+            sizes.append(max(map(lambda x: len(str(x[i]))+1,
+                                 rows+[headers])))
+        def make_len(val, size, blank):
+            val = str(val)
+            return val + blank*(size-len(val))
+        def line(row, sep='|', blank=' '):
+            return sep.join(make_len(row[i], sizes[i], blank)
+                            for i in range(len(row)))
+        ret = ''
+        ret += line(headers) + '\n'
+        ret += line(['']*len(sizes), '+', '-') + '\n'
+        for i in rows:
+            ret += line(i) + '\n'
+        return ret
 
 # Logging constants
 MSG_COLORS = defaultdict(
