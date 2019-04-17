@@ -16,9 +16,20 @@ from collections import defaultdict, namedtuple
 from dataclasses import dataclass, field
 from typing import List
 
-import requests
-from lxml import html
-from tabulate import tabulate
+try:
+    import requests
+    from lxml import html
+except ImportError:
+    print("Unable to import dependencies for scraping. Disabling SE scraping.", file=sys.stderr)
+    requests = None
+    html = None
+
+try:
+    from tabulate import tabulate
+except ImportError:
+    print("tabulate not found. Using fallback.", file=sys.stderr)
+    def tabulate(lines, headers, **_):
+        return '\n'.join(['\t'.join(map(str, row)) for row in [headers, ['-' * 30], *lines]])
 
 # Logging constants
 MSG_COLORS = defaultdict(
@@ -76,7 +87,7 @@ def exception(message=None):
     traceback.print_exc()
     print(CLEAR_COLOR, end='', file=sys.stdout)
 
-ALL = type('ALL', (), {'__contains__': lambda s,x: True})()
+ALL = type('ALL', (), {'__contains__': lambda s,x: True, 'add': lambda s,x: None, 'update': lambda s, *_, **__: None})()
 
 # Name Pool (for adventurers)
 
@@ -800,10 +811,15 @@ if __name__ == '__main__':
         '--bot-dir',
         default='ruins_bots'
     )
-    parser.add_argument(
-        '--url',
-        help="Download bot code from StackExchange first"
-    )
+    if requests and html:
+        parser.add_argument(
+            '--url',
+            help="Scrape bot code from StackExchange first"
+        )
+    else:
+        parser.set_defaults(
+            url=None
+        )
     parser.add_argument(
         '-1', '--single',
         action='store_true',
@@ -828,9 +844,9 @@ if __name__ == '__main__':
         help='Show all game log messages.'
     )
     logmodes.add_argument(
-        '--silent',
+        '--score-only',
         action='store_true',
-        help="Suppress all log messages"
+        help="Suppress all log messages except score"
     )
     logmodes.add_argument(
         '-q', '--quiet',
@@ -860,8 +876,12 @@ if __name__ == '__main__':
     if args.only and args.suppress:
         parser.error("Cannot pass --suppress and --only together.")
 
-    if args.silent:
-        LOG_SUPPRESS = ALL
+    if args.score_only:
+        LOG_SUPPRESS = MSG_TYPES
+        if args.single:
+            LOG_SUPPRESS.discard('score')
+        else:
+            LOG_SUPPRESS.discard('final')
     elif args.quiet:
         LOG_SUPPRESS |= {'minor', 'good', 'info'}
         if not args.single:
@@ -905,8 +925,7 @@ if __name__ == '__main__':
             args.seed = ''.join(
                 random.choice('0123456789ABCDEFGHJKLMNPQRSTVWXY') for _ in range(8)
             )
-            if not args.silent:
-                print(f"Seed: {MSG_COLORS['seed']}{args.seed}{CLEAR_COLOR}")
+            print(f"Seed: {MSG_COLORS['seed']}{args.seed}{CLEAR_COLOR}")
 
         if args.single:
             Ruins(*bot_classes, seed=args.seed).run_game()
