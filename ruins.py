@@ -61,7 +61,11 @@ def system_color_support():
                 ansi_on, rtype = winreg.QueryValueEx(console, 'VirtualTerminalLevel')
                 return bool(ansi_on)
             except (ImportError, FileNotFoundError):
-                traceback.print_exc()
+                print(
+                    "HKEY_CURRENT_USER\\Console\\VirtualTerminalLevel is missing from the"
+                    " registry. Colors will be disabled.",
+                    file=sys.stderr
+                )
                 return False
             else:
                 return True
