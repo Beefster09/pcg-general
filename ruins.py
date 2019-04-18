@@ -415,19 +415,19 @@ class Ruins:
             prefix = f"Turn {self.turn_number:03}"
         print(f"{MSG_COLORS[type]}[{prefix}]", *message, end=(LOG_END+end), **kwargs)
 
-    def gamelog_lines(self, lines, type='info'):
-        if type in LOG_SUPPRESS:
-            return
-        if self.complete:
-            prefix = 'Game End'
-        elif self.turn_number == 0:
-            prefix = 'Pregame'
-        else:
-            prefix = f"Turn {self.turn_number:03}"
-        print(MSG_COLORS[type], end='')
-        for line in lines:
-            print(f"[{prefix}] {line}")
-        print(CLEAR_COLOR, end='')
+    # def gamelog_lines(self, lines, type='info'):
+    #     if type in LOG_SUPPRESS:
+    #         return
+    #     if self.complete:
+    #         prefix = 'Game End'
+    #     elif self.turn_number == 0:
+    #         prefix = 'Pregame'
+    #     else:
+    #         prefix = f"Turn {self.turn_number:03}"
+    #     print(MSG_COLORS[type], end='')
+    #     for line in lines:
+    #         print(f"[{prefix}] {line}")
+    #     print(CLEAR_COLOR, end='')
 
     def snapshot(self, player):
         return RoomState(
@@ -580,7 +580,7 @@ class Ruins:
         for player, message in kill_later:
             self.kill(player, message)
 
-    def run_game(self):
+    def run_game(self, tablefmt='presto'):
         self.gamelog("A new game begins!", type='major')
         self.gamelog("Competitors:")
         for player in self.players.values():
@@ -617,22 +617,25 @@ class Ruins:
         ]
 
         self.gamelog(scores[0][0], "won the game", type='good')
-        self.gamelog("Score for this game:", type='score')
-        self.gamelog_lines(
+        self.gamelog(
+            "Score for this game:\n" +
             tabulate(
                 [
                     [
                         player.bot.__class__.__name__,
                         player.name,
                         f'${player.total_value}' if player.alive else 'DEAD',
+                        len(player.treasures),
+                        player.carry_weight,
+                        player.stamina,
                         score,
                     ]
                     for player, score in scores
                 ],
-                headers=['Bot Class', 'Character', 'Money', 'Score'],
-                colalign=['left',     'left',      'right', 'right'],
-                tablefmt='presto'
-            ).splitlines(),
+                headers=['Bot Class', 'Character', 'Money', 'Treasures', 'Weight', 'Stamina', 'Score'],
+                colalign=['left',     'left',      'right',     'right',  'right',   'right', 'right'],
+                tablefmt=tablefmt
+            ),
             type='score'
         )
 
@@ -644,6 +647,7 @@ def run_tournament(
     pool_games=20,
     required_lead=50,
     max_final_games=500,
+    tablefmt='presto',
     seed=None
 ):
     rand = random.Random(seed)
@@ -652,7 +656,7 @@ def run_tournament(
             return
         print(f"{MSG_COLORS[type]}[==TOURNAMENT==]", *message, end=(LOG_END+end), **kwargs)
 
-    full_pool = bots[:]
+    full_pool = list(bots)
     scores = {
         bot_class.__name__: 0
         for bot_class in full_pool
@@ -663,8 +667,9 @@ def run_tournament(
     }
 
     def run_game(bots):
+        rand.shuffle(bots)
         game = Ruins(*bots, seed=rand.getrandbits(1337))
-        for player, score in game.run_game():
+        for player, score in game.run_game(tablefmt=tablefmt):
             if not isinstance(player.bot, Drunkard):
                 scores[type(player.bot).__name__] += score
 
@@ -756,16 +761,18 @@ def run_tournament(
 
     ranked_bots = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     tourneylog("The tournament has completed successfully!")
-    tourneylog("Final scores of the finalists:", type='final')
-    for line in tabulate(
+    tourneylog(
+        "Final scores of the finalists:\n"
+        + tabulate(
             [
                 (botname, score, format(score / finalist_game, '.03f'))
                 for botname, score in ranked_bots
             ],
             headers=['Bot Class', 'Score', 'Mean Score'],
-            tablefmt='presto'
-        ).splitlines():
-            tourneylog(line, type='final')
+            tablefmt=tablefmt
+        ),
+        type='final'
+    )
 
     tourneylog(f"The winner of the tournament is {ranked_bots[0][0]}!", type='winner')
 
@@ -846,6 +853,12 @@ if __name__ == '__main__':
         " This will not limit the maximum number of adventurers in the ruins"
         " or fill in empty slots with Drunkards."
     )
+    parser.add_argument(
+        '-f', '--tablefmt', '--fmt',
+        default='presto',
+        help="The table format to use for scores"
+    )
+
     parser.add_argument(
         '-p', '--pause-on-death',
         nargs='?',
@@ -947,6 +960,6 @@ if __name__ == '__main__':
             print(f"Seed: {MSG_COLORS['seed']}{args.seed}{CLEAR_COLOR}")
 
         if args.single:
-            Ruins(*bot_classes, seed=args.seed).run_game()
+            Ruins(*bot_classes, seed=args.seed).run_game(tablefmt=args.tablefmt)
         else:
-            run_tournament(bot_classes, seed=args.seed)
+            run_tournament(bot_classes, tablefmt=args.tablefmt, seed=args.seed)
