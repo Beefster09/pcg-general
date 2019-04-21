@@ -6,6 +6,7 @@ import heapq
 import importlib
 import itertools
 import os.path
+import pickle
 import pkgutil
 import random
 import sys
@@ -15,9 +16,35 @@ from collections import defaultdict, namedtuple
 from dataclasses import dataclass, field
 from typing import List
 
-import requests
-from lxml import html
-from tabulate import tabulate
+try:
+    import requests
+    from lxml import html
+except ImportError:
+    print("Unable to import dependencies for scraping. Disabling SE scraping.", file=sys.stderr)
+    requests = None
+    html = None
+
+try:
+    from tabulate import tabulate
+except ImportError:
+    print("tabulate not found. Using fallback.", file=sys.stderr)
+    def tabulate(rows, headers, **_):
+        sizes = []
+        for i in range(len(rows[0])):
+            sizes.append(max(map(lambda x: len(str(x[i]))+1,
+                                 rows+[headers])))
+        def make_len(val, size, blank):
+            val = str(val)
+            return val + blank*(size-len(val))
+        def line(row, sep='|', blank=' '):
+            return sep.join(make_len(row[i], sizes[i], blank)
+                            for i in range(len(row)))
+        ret = ''
+        ret += line(headers) + '\n'
+        ret += line(['']*len(sizes), '+', '-') + '\n'
+        for i in rows:
+            ret += line(i) + '\n'
+        return ret
 
 # Logging constants
 MSG_COLORS = defaultdict(
@@ -37,7 +64,32 @@ MSG_COLORS = defaultdict(
     winner='\x1b[92m',
 )
 MSG_TYPES = set(MSG_COLORS)
-if sys.stdin.isatty():
+
+def system_color_support():
+    import platform
+    if platform.system() == 'Windows':
+        if platform.release() == '10':
+            try:
+                import winreg
+                top_key = winreg.ConnectRegistry(None, winreg.HKEY_CURRENT_USER)
+                console = winreg.OpenKey(top_key, 'Console')
+                ansi_on, rtype = winreg.QueryValueEx(console, 'VirtualTerminalLevel')
+                return bool(ansi_on)
+            except (ImportError, FileNotFoundError):
+                print(
+                    "HKEY_CURRENT_USER\\Console\\VirtualTerminalLevel is missing from the"
+                    " registry. Colors will be disabled.",
+                    file=sys.stderr
+                )
+                return False
+            else:
+                return True
+        else:
+            return False
+    else:
+        return 'xterm' in os.environ.get('TERM', '')
+
+if sys.stdin.isatty() and system_color_support():
     CLEAR_COLOR = '\x1b[0m'
     MSG_COLORS['seed'] = '\x1b[94m'
 else:
@@ -54,6 +106,7 @@ def exception(message=None):
     traceback.print_exc()
     print(CLEAR_COLOR, end='', file=sys.stdout)
 
+ALL = type('ALL', (), {'__contains__': lambda s,x: True, 'add': lambda s,x: None, 'update': lambda s, *_, **__: None})()
 
 # Name Pool (for adventurers)
 
@@ -150,6 +203,8 @@ Take = namedtuple('Take', ['treasure', 'bid'])
 Drop = namedtuple('Drop', ['treasure'])
 
 
+# === Adventurers ===
+
 class Adventurer:
     def __init__(self, name, random):
         self.name = name
@@ -183,6 +238,8 @@ class Drunkard(Adventurer):
                 return 'take', which, treasure.weight + (self.random.randrange(5) if state.players else 0)
         else:
             return action
+
+# === Player Information ===
 
 @dataclass
 class Player:
@@ -237,11 +294,19 @@ class Player:
         return f"{self.name} ({type(self.bot).__name__})"
 
 
-Trap = object()  # simple sentinel
 class Ruins:
+    pause_on_death = []
+
     def __init__(self, *adventurers, seed=None):
         assert adventurers
+        if seed is None:
+            seed = random.getrandbits(6969)
+        self._seed_obj = [adv.__name__ for adv in adventurers], seed
+        self._replay_saved = False
         self.random = random.Random(seed)
+        # create a separate random instance for flavor so that deaths and other
+        # flavorful events don't interfere with treasure generation
+        self.flavor_rand = random.Random(self.random.getrandbits(420))
         self.treasure_num = itertools.count(1)
         self.players = {
             name: Player(name, adventurer(name, self.new_seed()))
@@ -254,18 +319,35 @@ class Ruins:
         self.turn_number = 0
         self.complete = False
 
+    @classmethod
+    def from_replay(cls, replay_file, candidates):
+        with open(replay_file, 'rb') as f:
+            adv_names, seed = pickle.load(f)
+        cand = {
+            botclass.__name__: botclass
+            for botclass in [*candidates, Drunkard]
+        }
+        adventurers = [cand[name] for name in adv_names]
+        return cls(*adventurers, seed=seed)
+
+    def save_replay(self, replay_file):
+        if not self._replay_saved:
+            with open(replay_file, 'wb') as f:
+                pickle.dump(self._seed_obj, f)
+            self._replay_saved = True
+
     def new_seed(self):
         return random.Random(self.random.getrandbits(744))
 
     def generate_name(self):
-        r = self.random.random()
-        parts = [self.random.choice(FIRST_NAMES)]
+        r = self.flavor_rand.random()
+        parts = [self.flavor_rand.choice(FIRST_NAMES)]
         if r < 0.75:
-            parts.append(self.random.choice(LAST_NAMES))
+            parts.append(self.flavor_rand.choice(LAST_NAMES))
             if r < 0.15:
-                parts.append(self.random.choice(NAME_SUFFIXES))
+                parts.append(self.flavor_rand.choice(NAME_SUFFIXES))
         else:
-            parts.append(self.random.choice(MONIKERS))
+            parts.append(self.flavor_rand.choice(MONIKERS))
         return ' '.join(parts)
 
     def ndr(self, n, r):
@@ -284,27 +366,26 @@ class Ruins:
         while len(self.rooms) < room:
             self.rooms.append(self.generate_room(len(self.rooms) + 1))
 
-    def kill(self, player, message=Trap):
-        if message is Trap:
-            message = random.choice([
-                # Yes, this is the global random.
-                # This is cosmetic and must not interfere with room generation
-                "was sliced in half by a swinging blade trap.",
-                "fell into a pit of spikes.",
-                "was crushed by a boulder.",
-                "was eaten by a wild shriekbat.",
-                "was shot by a crossbow trap.",
-                "fell into a bottomless pit.",
-                "was devoured by a mimic.",
-                "was incinerated by a fire trap.",
-                "got sucked into a dimensional vortex.",
-                "mysteriously vanished.",
-                "was flung into a pool of acid.",
-                "was stung by a giant bee.",
-                "was absorbed by a gelatinous monster.",
-                "was bitten by a swarm of venomous snakes.",
-                "was decapitated by a sword trap"
-            ])
+    def trap(self):
+        return self.flavor_rand.choice([
+            "was sliced in half by a swinging blade trap.",
+            "fell into a pit of spikes.",
+            "was crushed by a boulder.",
+            "was eaten by a wild shriekbat.",
+            "was shot by a crossbow trap.",
+            "fell into a bottomless pit.",
+            "was devoured by a mimic.",
+            "was incinerated by a fire trap.",
+            "got sucked into a dimensional vortex.",
+            "mysteriously vanished.",
+            "was flung into a pool of acid.",
+            "was stung by a giant bee.",
+            "was absorbed by a gelatinous monster.",
+            "was bitten by a swarm of venomous snakes.",
+            "was decapitated by a sword trap"
+        ])
+
+    def kill(self, player, message):
         self.gamelog(player, message, type='bad')
         player.stamina = 0
         if player.treasures:
@@ -313,6 +394,15 @@ class Ruins:
             for treasure in player.treasures:
                 self.gamelog(treasure, type='debug')
             player.treasures = []
+        if type(player.bot).__name__ in self.pause_on_death:
+            if self._replay_saved:
+                input('Press enter to continue...')
+            else:
+                filename = input('Save a replay? (enter a name) ')
+                if filename:
+                    self.save_replay(filename + '.seed')
+                    if input('Exit? ').lower().startswith('y'):
+                        sys.exit(1)
 
     def gamelog(self, *message, type='info', end='', **kwargs):
         if type in LOG_SUPPRESS:
@@ -325,19 +415,19 @@ class Ruins:
             prefix = f"Turn {self.turn_number:03}"
         print(f"{MSG_COLORS[type]}[{prefix}]", *message, end=(LOG_END+end), **kwargs)
 
-    def gamelog_lines(self, lines, type='info'):
-        if type in LOG_SUPPRESS:
-            return
-        if self.complete:
-            prefix = 'Game End'
-        elif self.turn_number == 0:
-            prefix = 'Pregame'
-        else:
-            prefix = f"Turn {self.turn_number:03}"
-        print(MSG_COLORS[type], end='')
-        for line in lines:
-            print(f"[{prefix}] {line}")
-        print(CLEAR_COLOR, end='')
+    # def gamelog_lines(self, lines, type='info'):
+    #     if type in LOG_SUPPRESS:
+    #         return
+    #     if self.complete:
+    #         prefix = 'Game End'
+    #     elif self.turn_number == 0:
+    #         prefix = 'Pregame'
+    #     else:
+    #         prefix = f"Turn {self.turn_number:03}"
+    #     print(MSG_COLORS[type], end='')
+    #     for line in lines:
+    #         print(f"[{prefix}] {line}")
+    #     print(CLEAR_COLOR, end='')
 
     def snapshot(self, player):
         return RoomState(
@@ -366,7 +456,7 @@ class Ruins:
         for player, action in actions:
             self.gamelog(player, action, type='debug')
             if action is None:
-                kill_later.append((player, Trap))
+                kill_later.append((player, f"{self.trap()} (Invalid action.)"))
                 continue
 
             elif isinstance(action, Move):
@@ -393,7 +483,9 @@ class Ruins:
                                 len(player.treasures)
                             } treasures, totaling ${
                                 player.total_value
-                            } in value.""",
+                            } in value, and {
+                                player.carry_weight
+                            }kg in weight.""",
                             type='minor'
                         )
                 else:
@@ -404,16 +496,38 @@ class Ruins:
                 treasure, bid = action
                 try:
                     bid = int(bid)
-                    target = self.rooms[player.room - 1][int(treasure)]
-                    min_bid = target.weight
-                except (IndexError, TypeError, ValueError):
-                    kill_later.append((player, Trap))
+                except ValueError:
+                    kill_later.append((player, self.trap() + " (Non-integer bid)"))
                     continue
-                if min_bid <= bid <= player.stamina and target.weight + player.carry_weight <= 50:
+
+                try:
+                    target = self.rooms[player.room - 1][int(treasure)]
+                except IndexError:
+                    kill_later.append((player, self.trap() + " (Invalid treasure index)"))
+                    continue
+                except (TypeError, ValueError):
+                    kill_later.append(
+                        (player, f"{self.trap()} (Non-integer treasure index)")
+                    )
+                    continue
+
+                min_bid = target.weight
+                if bid < min_bid:
+                    kill_later.append((
+                        player,
+                        f"tried to lift {target.name} but {self.trap()} (Bid too low)"
+                    ))
+                elif bid > player.stamina:
+                    kill_later.append((
+                        player,
+                        f"went all out to take {target.name}, but had a heart attack and"
+                        " collapsed. (Bid too high)"
+                    ))
+                elif target.weight + player.carry_weight > 50:
+                    kill_later.append((player, self.trap() + " (Treasure too heavy)"))
+                else:
                     bids[player.room, treasure].append((bid, player.name))
                     player.stamina -= bid
-                else:
-                    kill_later.append((player, Trap))
 
             elif isinstance(action, Drop):
                 # No need to check stamina here because we already know this player
@@ -422,9 +536,10 @@ class Ruins:
                 try:
                     dropped = player.treasures.pop(int(action.treasure))
                 except (IndexError, TypeError, ValueError):
-                    kill_later.append(
-                        (player, "was bitten by a venomous spider and died moments later.")
-                    )
+                    kill_later.append((
+                        player,
+                        "was bitten by a venomous spider and died moments later. (Invalid drop)"
+                    ))
                 else:
                     drops[player.room].append(dropped)
                     self.gamelog(
@@ -465,7 +580,7 @@ class Ruins:
         for player, message in kill_later:
             self.kill(player, message)
 
-    def run_game(self):
+    def run_game(self, tablefmt='presto'):
         self.gamelog("A new game begins!", type='major')
         self.gamelog("Competitors:")
         for player in self.players.values():
@@ -502,22 +617,25 @@ class Ruins:
         ]
 
         self.gamelog(scores[0][0], "won the game", type='good')
-        self.gamelog("Score for this game:", type='score')
-        self.gamelog_lines(
+        self.gamelog(
+            "Score for this game:\n" +
             tabulate(
                 [
                     [
                         player.bot.__class__.__name__,
                         player.name,
                         f'${player.total_value}' if player.alive else 'DEAD',
+                        len(player.treasures),
+                        player.carry_weight,
+                        player.stamina,
                         score,
                     ]
                     for player, score in scores
                 ],
-                headers=['Bot Class', 'Character', 'Money', 'Score'],
-                colalign=['left',     'left',      'right', 'right'],
-                tablefmt='presto'
-            ).splitlines(),
+                headers=['Bot Class', 'Character', 'Money', 'Treasures', 'Weight', 'Stamina', 'Score'],
+                colalign=['left',     'left',      'right',     'right',  'right',   'right', 'right'],
+                tablefmt=tablefmt
+            ),
             type='score'
         )
 
@@ -529,6 +647,7 @@ def run_tournament(
     pool_games=20,
     required_lead=50,
     max_final_games=500,
+    tablefmt='presto',
     seed=None
 ):
     rand = random.Random(seed)
@@ -537,7 +656,7 @@ def run_tournament(
             return
         print(f"{MSG_COLORS[type]}[==TOURNAMENT==]", *message, end=(LOG_END+end), **kwargs)
 
-    full_pool = bots[:]
+    full_pool = list(bots)
     scores = {
         bot_class.__name__: 0
         for bot_class in full_pool
@@ -548,8 +667,9 @@ def run_tournament(
     }
 
     def run_game(bots):
+        rand.shuffle(bots)
         game = Ruins(*bots, seed=rand.getrandbits(1337))
-        for player, score in game.run_game():
+        for player, score in game.run_game(tablefmt=tablefmt):
             if not isinstance(player.bot, Drunkard):
                 scores[type(player.bot).__name__] += score
 
@@ -628,6 +748,9 @@ def run_tournament(
         if finalist_game >= max_final_games:
             tourneylog("Maximum number of finalist games run!", type='warning')
             break
+        if len(scores) < 2:
+            tourneylog("There aren't enough competitors. Exiting.", type='bad')
+            return
         first, second = heapq.nlargest(2, scores.values())
         if first - second >= required_lead:
             tourneylog(
@@ -638,16 +761,18 @@ def run_tournament(
 
     ranked_bots = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     tourneylog("The tournament has completed successfully!")
-    tourneylog("Final scores of the finalists:", type='final')
-    for line in tabulate(
+    tourneylog(
+        "Final scores of the finalists:\n"
+        + tabulate(
             [
                 (botname, score, format(score / finalist_game, '.03f'))
                 for botname, score in ranked_bots
             ],
             headers=['Bot Class', 'Score', 'Mean Score'],
-            tablefmt='presto'
-        ).splitlines():
-            tourneylog(line, type='final')
+            tablefmt=tablefmt
+        ),
+        type='final'
+    )
 
     tourneylog(f"The winner of the tournament is {ranked_bots[0][0]}!", type='winner')
 
@@ -698,16 +823,50 @@ def download_bots(url, bot_dir):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-s', '--seed', help="Seed to use")
+    parser.add_argument(
+        '-s', '--seed',
+        help="Seed to use"
+    )
+    parser.add_argument(
+        '-r', '--replay',
+        help="Run from a replay file."
+    )
 
-    parser.add_argument('-d', '--bot-dir', default='ruins_bots')
-    parser.add_argument('--url', help="Download bot code from StackExchange first")
+    parser.add_argument(
+        '-d',
+        '--bot-dir',
+        default='ruins_bots'
+    )
+    if requests and html:
+        parser.add_argument(
+            '--url',
+            help="Scrape bot code from StackExchange first"
+        )
+    else:
+        parser.set_defaults(
+            url=None
+        )
     parser.add_argument(
         '-1', '--single',
         action='store_true',
         help="Run a single game instead of a tournament."
         " This will not limit the maximum number of adventurers in the ruins"
         " or fill in empty slots with Drunkards."
+    )
+    parser.add_argument(
+        '-f', '--tablefmt', '--fmt',
+        default='presto',
+        help="The table format to use for scores"
+    )
+
+    parser.add_argument(
+        '-p', '--pause-on-death',
+        nargs='?',
+        metavar='CLASSNAME',
+        const=ALL,
+        default=[],
+        type=lambda s: s.split(':'),
+        help="Pause the controller when an adventurer dies. You may also specify a colon-separated list of class names to match against."
     )
 
     logmodes = parser.add_mutually_exclusive_group()
@@ -717,9 +876,9 @@ if __name__ == '__main__':
         help='Show all game log messages.'
     )
     logmodes.add_argument(
-        '--silent',
+        '--score-only',
         action='store_true',
-        help="Suppress all log messages"
+        help="Suppress all log messages except score"
     )
     logmodes.add_argument(
         '-q', '--quiet',
@@ -749,12 +908,16 @@ if __name__ == '__main__':
     if args.only and args.suppress:
         parser.error("Cannot pass --suppress and --only together.")
 
-    if args.silent:
-        LOG_SUPPRESS = type('ALL', (), {'__contains__': lambda s,x: True})()
+    if args.score_only:
+        LOG_SUPPRESS = MSG_TYPES
+        if args.single:
+            LOG_SUPPRESS.discard('score')
+        else:
+            LOG_SUPPRESS.discard('final')
     elif args.quiet:
         LOG_SUPPRESS |= {'minor', 'good', 'info'}
         if not args.single:
-            LOG_SUPPRESS.update({'score', 'major', 'bad'})
+            LOG_SUPPRESS.update({'score', 'major'})
     elif args.only:
         LOG_SUPPRESS = MSG_TYPES - set(args.only)
 
@@ -766,6 +929,7 @@ if __name__ == '__main__':
         exception = lambda *_, **__: None
 
     if args.url:
+        os.makedirs(args.bot_dir, exist_ok=True)
         download_bots(args.url, args.bot_dir)
 
     bot_classes = []
@@ -784,12 +948,18 @@ if __name__ == '__main__':
                             and issubclass(obj, Adventurer)):
                         bot_classes.append(obj)
 
-    if args.seed is None:
-        args.seed = ''.join(random.choice('0123456789ABCDEFGHJKLMNPQRSTVWXY') for _ in range(8))
-        if not args.silent:
+    Ruins.pause_on_death = args.pause_on_death
+
+    if args.replay:
+        Ruins.from_replay(args.replay, [*bot_classes, Drunkard]).run_game()
+    else:
+        if args.seed is None:
+            args.seed = ''.join(
+                random.choice('0123456789ABCDEFGHJKLMNPQRSTVWXY') for _ in range(8)
+            )
             print(f"Seed: {MSG_COLORS['seed']}{args.seed}{CLEAR_COLOR}")
 
-    if args.single:
-        Ruins(*bot_classes, seed=args.seed).run_game()
-    else:
-        run_tournament(bot_classes, seed=args.seed)
+        if args.single:
+            Ruins(*bot_classes, seed=args.seed).run_game(tablefmt=args.tablefmt)
+        else:
+            run_tournament(bot_classes, tablefmt=args.tablefmt, seed=args.seed)
